@@ -99,12 +99,21 @@ claude-setup install --all
 - `repo` (required): `owner/repository` format
 - `ref` (optional): Branch, tag, or commit SHA (default: `main`)
 - `path` (optional): Subdirectory in repo containing config (default: `.`)
-- `token` (optional): GitHub PAT for private repos (can use env var)
+- `token` (optional): GitHub PAT for private repos. Use `${GITHUB_TOKEN}` or `$GITHUB_TOKEN` to reference environment variables.
 
 **For private repositories:**
 ```bash
+# Set your GitHub token
 export GITHUB_TOKEN=ghp_your_token_here
+
+# Run init - it will automatically detect GITHUB_TOKEN
+# and add "token": "${GITHUB_TOKEN}" to sources.json
+claude-setup init --github your-org/private-config
+
+# Token is expanded at runtime, keeping it secure
 ```
+
+**Environment variable expansion:** Any string value in sources.json can reference environment variables using `${VAR_NAME}` or `$VAR_NAME` syntax. The tool expands these at runtime, allowing you to keep secrets out of config files.
 
 ### Source Type: Zip File (HTTP/HTTPS)
 

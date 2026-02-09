@@ -704,15 +704,26 @@ def init(
 
     elif github_repo:
         # Create GitHub source
-        sources_config["sources"].append({
+        source_entry = {
             "name": "company-config",
             "type": "github",
             "repo": github_repo,
             "ref": github_ref,
-        })
+        }
+
+        # Auto-detect GITHUB_TOKEN for private repos
+        import os
+        if "GITHUB_TOKEN" in os.environ:
+            source_entry["token"] = "${GITHUB_TOKEN}"
+            console.print("[dim]Detected GITHUB_TOKEN environment variable[/dim]")
+
+        sources_config["sources"].append(source_entry)
         sources_file = create_default_sources(claude_dir, sources_config)
         print_success(f"Created sources configuration at {sources_file}")
         console.print(f"\n[bold]Source:[/bold] GitHub repo [cyan]{github_repo}[/cyan] (ref: {github_ref})")
+
+        if "token" in source_entry:
+            console.print("[dim]Token will be read from $GITHUB_TOKEN environment variable[/dim]")
 
     elif local_path:
         # Create local source
@@ -766,12 +777,20 @@ def init(
 
             ref = questionary.text("Branch or tag:", default="main").ask()
 
-            sources_config["sources"].append({
+            source_entry = {
                 "name": "company-config",
                 "type": "github",
                 "repo": repo,
                 "ref": ref or "main",
-            })
+            }
+
+            # Auto-detect GITHUB_TOKEN for private repos
+            import os
+            if "GITHUB_TOKEN" in os.environ:
+                source_entry["token"] = "${GITHUB_TOKEN}"
+                console.print("[dim]Detected GITHUB_TOKEN environment variable[/dim]")
+
+            sources_config["sources"].append(source_entry)
 
         elif choice == "local":
             path = questionary.path(
