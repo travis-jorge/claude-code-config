@@ -364,6 +364,148 @@ def update(
 
 
 @app.command()
+def upgrade(
+    check: bool = typer.Option(False, "--check", help="Check if upgrade is available"),
+):
+    """Upgrade claude-setup tool to the latest version.
+
+    This upgrades the tool itself (not the config). For config updates, use 'update'.
+    """
+    import subprocess
+    import sys
+
+    show_banner(__version__)
+
+    # Get the installation directory
+    tool_dir = get_tool_dir()
+
+    # Check if this is a git repository
+    git_dir = tool_dir / ".git"
+    if not git_dir.exists():
+        print_error("This installation is not from git.")
+        console.print("\n[yellow]To upgrade:[/yellow]")
+        console.print("  If installed via pip: [cyan]pip install --upgrade claude-setup[/cyan]")
+        console.print("  If from source: Clone the repo and reinstall")
+        raise typer.Exit(1)
+
+    print_info("Checking for updates...")
+
+    # Fetch latest from remote
+    try:
+        subprocess.run(
+            ["git", "-C", str(tool_dir), "fetch", "origin"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except subprocess.CalledProcessError as e:
+        print_error(f"Failed to fetch updates: {e.stderr}")
+        raise typer.Exit(1)
+
+    # Check if updates are available
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(tool_dir), "rev-list", "HEAD...origin/main", "--count"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        commits_behind = int(result.stdout.strip())
+    except subprocess.CalledProcessError:
+        # Try master branch if main doesn't exist
+        try:
+            result = subprocess.run(
+                ["git", "-C", str(tool_dir), "rev-list", "HEAD...origin/master", "--count"],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            commits_behind = int(result.stdout.strip())
+        except subprocess.CalledProcessError as e:
+            print_error(f"Failed to check for updates: {e.stderr}")
+            raise typer.Exit(1)
+
+    if commits_behind == 0:
+        print_success("You're already on the latest version!")
+        raise typer.Exit(0)
+
+    console.print(f"\n[yellow]→[/yellow] {commits_behind} update(s) available")
+
+    if check:
+        console.print("\n[dim]Run without --check to upgrade[/dim]")
+        raise typer.Exit(0)
+
+    # Confirm upgrade
+    if not confirm(f"Upgrade to latest version?"):
+        print_warning("Upgrade cancelled.")
+        raise typer.Exit(0)
+
+    print_info("Upgrading tool...")
+
+    # Check for uncommitted changes
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(tool_dir), "status", "--porcelain"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        if result.stdout.strip():
+            print_warning("You have uncommitted changes. Creating backup...")
+            # Stash changes
+            subprocess.run(
+                ["git", "-C", str(tool_dir), "stash", "push", "-m", "claude-setup auto-upgrade"],
+                check=True,
+                capture_output=True,
+            )
+            console.print("[dim]Changes stashed. Run 'git stash pop' to restore.[/dim]")
+    except subprocess.CalledProcessError as e:
+        print_error(f"Failed to check git status: {e.stderr}")
+        raise typer.Exit(1)
+
+    # Pull latest changes
+    try:
+        subprocess.run(
+            ["git", "-C", str(tool_dir), "pull", "origin"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        print_success("Downloaded latest version")
+    except subprocess.CalledProcessError as e:
+        print_error(f"Failed to pull updates: {e.stderr}")
+        raise typer.Exit(1)
+
+    # Reinstall package
+    print_info("Reinstalling package...")
+    try:
+        subprocess.run(
+            [sys.executable, "-m", "pip", "install", "-e", str(tool_dir), "--quiet"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        print_success("Package reinstalled")
+    except subprocess.CalledProcessError as e:
+        print_error(f"Failed to reinstall: {e.stderr}")
+        raise typer.Exit(1)
+
+    # Show new version
+    try:
+        result = subprocess.run(
+            [sys.executable, "-m", "claude_setup", "version"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        console.print(f"\n[green]✓[/green] Upgrade complete! {result.stdout.strip()}")
+    except subprocess.CalledProcessError:
+        print_success("Upgrade complete!")
+
+    console.print("\n[dim]Note: Config updates use 'claude-setup update', not 'upgrade'[/dim]")
+
+
+@app.command()
 def version():
     """Show version information."""
     console.print(f"[bold cyan]claude-setup[/bold cyan] version [yellow]{__version__}[/yellow]")
@@ -383,7 +525,8 @@ def interactive_menu():
                     questionary.Choice("🔌 Manage Plugins", value="plugins"),
                     questionary.Choice("💾 View Backups", value="backups"),
                     questionary.Choice("⏮️  Rollback to Backup", value="rollback"),
-                    questionary.Choice("🔄 Check for Updates", value="update"),
+                    questionary.Choice("🔄 Check for Config Updates", value="update"),
+                    questionary.Choice("⬆️  Upgrade Tool", value="upgrade"),
                     questionary.Choice("🚪 Exit", value="exit"),
                 ],
             ).ask()
@@ -406,6 +549,8 @@ def interactive_menu():
                 interactive_rollback()
             elif choice == "update":
                 interactive_update()
+            elif choice == "upgrade":
+                upgrade(check=False)
 
             # Pause before showing menu again
             console.print()
