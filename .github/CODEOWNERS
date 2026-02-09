@@ -1,0 +1,24 @@
+# Code Owners for claude-code-config
+# 
+# These owners will be the default owners for everything in the repo.
+# Unless a later match takes precedence, @travis-jorge will be requested
+# for review when someone opens a pull request.
+
+# Global owner
+* @travis-jorge
+
+# Python source code
+/src/ @travis-jorge
+
+# Tests
+/tests/ @travis-jorge
+
+# Documentation
+*.md @travis-jorge
+
+# Configuration
+/examples/ @travis-jorge
+pyproject.toml @travis-jorge
+
+# GitHub workflows (if added later)
+/.github/ @travis-jorge

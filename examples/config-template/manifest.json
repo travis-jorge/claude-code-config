@@ -1,0 +1,62 @@
+{
+  "version": "1.0.0",
+  "categories": [
+    {
+      "name": "core",
+      "description": "Core configuration files (CLAUDE.md, settings.json, statusline)",
+      "target_dir": ".claude",
+      "install_type": "merge",
+      "files": [
+        {
+          "src": "core/CLAUDE.md",
+          "dest": "CLAUDE.md",
+          "merge": false,
+          "executable": false,
+          "template": false
+        },
+        {
+          "src": "core/settings.json",
+          "dest": "settings.json",
+          "merge": true,
+          "executable": false,
+          "template": true
+        },
+        {
+          "src": "core/statusline.sh",
+          "dest": "statusline.sh",
+          "merge": false,
+          "executable": true,
+          "template": false
+        }
+      ]
+    },
+    {
+      "name": "agents",
+      "description": "Agent definition files",
+      "target_dir": ".claude/agents",
+      "install_type": "overwrite",
+      "files": []
+    },
+    {
+      "name": "rules",
+      "description": "Team rules and guidelines",
+      "target_dir": ".claude/rules",
+      "install_type": "overwrite",
+      "files": []
+    },
+    {
+      "name": "commands",
+      "description": "Custom commands and workflows",
+      "target_dir": ".claude/commands",
+      "install_type": "discover",
+      "files": []
+    },
+    {
+      "name": "plugins",
+      "description": "Required Claude Code plugins",
+      "target_dir": ".claude/plugins",
+      "install_type": "check",
+      "files": []
+    }
+  ]
+}

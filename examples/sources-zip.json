@@ -1,0 +1,10 @@
+{
+  "sources": [
+    {
+      "name": "company-config",
+      "type": "zip",
+      "url": "https://example.com/releases/claude-config-v1.0.0.zip",
+      "path": "config"
+    }
+  ]
+}

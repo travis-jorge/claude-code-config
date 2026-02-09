@@ -1,0 +1,17 @@
+{
+  "sources": [
+    {
+      "name": "company-base",
+      "type": "github",
+      "repo": "your-org/claude-config-base",
+      "ref": "main",
+      "path": "config"
+    },
+    {
+      "name": "team-overrides",
+      "type": "local",
+      "path": "~/team-specific-config"
+    }
+  ],
+  "comment": "Multiple sources are merged in order. Later sources can override earlier ones."
+}

@@ -1,0 +1,9 @@
+{
+  "sources": [
+    {
+      "name": "local-config",
+      "type": "local",
+      "path": "~/my-claude-config"
+    }
+  ]
+}
