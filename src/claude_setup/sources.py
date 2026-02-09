@@ -1,6 +1,8 @@
 """Configuration source management."""
 
 import json
+import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -8,6 +10,57 @@ import zipfile
 from pathlib import Path
 from typing import Optional
 from urllib.request import urlretrieve
+
+
+def expand_env_vars(value: str) -> str:
+    """Expand environment variables in a string.
+
+    Supports ${VAR_NAME} and $VAR_NAME syntax.
+
+    Args:
+        value: String potentially containing env var references
+
+    Returns:
+        String with environment variables expanded
+
+    Raises:
+        SourceError: If referenced environment variable is not set
+    """
+    if not isinstance(value, str):
+        return value
+
+    # Pattern to match ${VAR_NAME} or $VAR_NAME
+    pattern = r'\$\{([^}]+)\}|\$([A-Za-z_][A-Za-z0-9_]*)'
+
+    def replace_var(match):
+        var_name = match.group(1) or match.group(2)
+        if var_name not in os.environ:
+            raise SourceError(
+                f"Environment variable '{var_name}' not set. "
+                f"Please set it with: export {var_name}=<value>"
+            )
+        return os.environ[var_name]
+
+    return re.sub(pattern, replace_var, value)
+
+
+def expand_config_env_vars(config: dict) -> dict:
+    """Recursively expand environment variables in a config dict.
+
+    Args:
+        config: Configuration dictionary
+
+    Returns:
+        New dictionary with environment variables expanded
+    """
+    if isinstance(config, dict):
+        return {key: expand_config_env_vars(value) for key, value in config.items()}
+    elif isinstance(config, list):
+        return [expand_config_env_vars(item) for item in config]
+    elif isinstance(config, str):
+        return expand_env_vars(config)
+    else:
+        return config
 
 
 class ConfigSource:
@@ -213,6 +266,12 @@ class SourceManager:
         sources_config = config.get("sources", [])
 
         for idx, source_config in enumerate(sources_config):
+            # Expand environment variables in config
+            try:
+                source_config = expand_config_env_vars(source_config)
+            except SourceError as e:
+                raise SourceError(f"Failed to expand environment variables: {e}")
+
             source_type = source_config.get("type")
             source_name = source_config.get("name", f"source-{idx}")
 
