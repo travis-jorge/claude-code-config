@@ -693,8 +693,23 @@ def interactive_create_config():
     # Step 2: Create backup first
     try:
         backup_mgr = BackupManager(claude_dir)
-        backup_path = backup_mgr.create_backup([])
-        print_success(f"Safety backup created at {backup_path.name}")
+        print_info("Creating safety backup of ~/.claude...")
+
+        # Collect all files in ~/.claude for backup
+        files_to_backup = []
+        for item in claude_dir.rglob("*"):
+            if item.is_file():
+                # Skip the backups directory itself
+                try:
+                    rel = item.relative_to(claude_dir)
+                    if "backups" not in rel.parts:
+                        files_to_backup.append(item)
+                except ValueError:
+                    continue
+
+        # Create backup with a special category marker
+        backup_path = backup_mgr.create_backup(files_to_backup, ["pre-create-config-wizard"])
+        print_success(f"Backup created: {backup_path.name}")
     except Exception as e:
         print_warning(f"Could not create backup: {e}")
         if not questionary.confirm("Continue without backup?", default=False).ask():
