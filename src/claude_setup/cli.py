@@ -392,9 +392,9 @@ def interactive_menu():
                     questionary.Choice("📊 Check Installation Status", value="status"),
                     questionary.Choice("🔌 Manage Plugins", value="plugins"),
                     questionary.Choice("💾 View Backups", value="backups"),
-                    questionary.Choice("⏮️  Rollback to Backup", value="rollback"),
+                    questionary.Choice("⏮️ Rollback to Backup", value="rollback"),
                     questionary.Choice("🔄 Check for Updates", value="update"),
-                    questionary.Choice("🏗️  Create Config Repo", value="create-config"),
+                    questionary.Choice("🏗️ Create Config Repo", value="create-config"),
                     questionary.Choice("🚪 Exit", value="exit"),
                 ],
             ).ask()
