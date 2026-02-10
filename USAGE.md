@@ -63,6 +63,33 @@ Choose from:
 - Shows what changed
 - Option to install updates immediately
 
+### 🏗️ Create Config Repo
+
+Generates a new config repository from your current `~/.claude` setup. This is useful for administrators who want to create a team config based on their working environment.
+
+**What it does:**
+- Scans your `~/.claude` directory
+- Classifies files into categories (core, agents, rules, commands)
+- Separates team settings from personal settings
+- Lets you choose what to include
+- Generates a properly structured config repo
+
+**When to use:**
+- You have a working `~/.claude` setup to share with your team
+- You want to create a team config without manually copying files
+- You need to bootstrap a new config repository
+
+**Interactive flow:**
+1. Backs up `~/.claude` for safety
+2. Shows discovered files grouped by category
+3. Lets you select which categories to include
+4. Lets you edit permissions and plugins
+5. Previews the config structure
+6. Generates the repository
+7. Shows next steps for distribution
+
+See [Creating Config from Existing Setup](ADMIN-GUIDE.md#creating-config-from-existing-setup) for detailed walkthrough.
+
 ### 🚪 Exit
 Returns to terminal
 
@@ -93,6 +120,7 @@ claude-setup plugins                # Plugin info
 claude-setup backups                # List backups
 claude-setup rollback               # Rollback
 claude-setup update                 # Update
+claude-setup create-config          # Create config repo from ~/.claude
 ```
 
 ## 🎨 Interactive vs CLI
@@ -104,6 +132,7 @@ claude-setup update                 # Update
 | Scripting/Automation | ❌ Not suitable | ✅ Use flags |
 | First-time users | ✅ Self-explanatory | ⚠️ Need docs |
 | Power users | ⚠️ Extra clicks | ✅ Direct commands |
+| Create Config Repo | `create-config` menu option | `claude-setup create-config --output ~/my-config` |
 
 **Recommendation**:
 - Use **Interactive Menu** for exploration and safety

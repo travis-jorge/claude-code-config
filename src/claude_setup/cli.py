@@ -11,6 +11,14 @@ from rich.console import Console
 from claude_setup import __version__
 from claude_setup.backup import BackupManager
 from claude_setup.categories import CategoryRegistry
+from claude_setup.create_config import (
+    ConfigPlan,
+    filter_settings_for_team,
+    generate_config_repo,
+    preview_config_plan,
+    scan_claude_dir,
+    scan_settings,
+)
 from claude_setup.display import (
     confirm,
     print_error,
@@ -20,7 +28,9 @@ from claude_setup.display import (
     show_backup_list,
     show_banner,
     show_categories,
+    show_config_preview,
     show_install_plan,
+    show_scan_results,
     show_status,
     show_summary,
 )
@@ -384,6 +394,7 @@ def interactive_menu():
                     questionary.Choice("💾 View Backups", value="backups"),
                     questionary.Choice("⏮️  Rollback to Backup", value="rollback"),
                     questionary.Choice("🔄 Check for Updates", value="update"),
+                    questionary.Choice("🏗️  Create Config Repo", value="create-config"),
                     questionary.Choice("🚪 Exit", value="exit"),
                 ],
             ).ask()
@@ -406,6 +417,8 @@ def interactive_menu():
                 interactive_rollback()
             elif choice == "update":
                 interactive_update()
+            elif choice == "create-config":
+                interactive_create_config()
 
             # Pause before showing menu again
             console.print()
@@ -665,6 +678,333 @@ def interactive_update():
         print_success("Update complete!")
     except InstallationError as e:
         print_error(f"Update failed: {e}")
+
+
+def interactive_create_config():
+    """Interactive config repository creation wizard."""
+    # Step 1: Verify ~/.claude exists
+    claude_dir = get_claude_dir()
+    if not claude_dir.exists():
+        print_error(f"Directory {claude_dir} does not exist")
+        console.print("\n[bold]This wizard requires an existing ~/.claude directory.[/bold]")
+        console.print("Run [cyan]Install Configuration[/cyan] first to set up your configuration.\n")
+        return
+
+    # Step 2: Create backup first
+    try:
+        backup_mgr = BackupManager(claude_dir)
+        backup_path = backup_mgr.create_backup([])
+        print_success(f"Safety backup created at {backup_path.name}")
+    except Exception as e:
+        print_warning(f"Could not create backup: {e}")
+        if not questionary.confirm("Continue without backup?", default=False).ask():
+            return
+
+    # Step 3: Scan ~/.claude
+    try:
+        print_info("Scanning ~/.claude directory...")
+        scan_result = scan_claude_dir(claude_dir)
+        console.print()
+        show_scan_results(scan_result)
+        console.print()
+    except Exception as e:
+        print_error(f"Failed to scan {claude_dir}: {e}")
+        return
+
+    # Step 4: Category selection
+    categories = ["core", "agents", "rules", "commands"]
+    selected_categories = questionary.checkbox(
+        "Select categories to include:",
+        choices=[
+            {"name": cat, "value": cat, "checked": True}
+            for cat in categories
+        ],
+    ).ask()
+
+    if selected_categories is None:
+        print_warning("Cancelled.")
+        return
+
+    if not selected_categories:
+        print_warning("No categories selected.")
+        return
+
+    # Filter files by selected categories
+    selected_files = [
+        f for f in scan_result.files
+        if f.category in selected_categories
+    ]
+
+    # Step 5: Settings.json handling (if core selected)
+    settings = None
+    if "core" in selected_categories and scan_result.settings:
+        console.print("\n[bold cyan]Settings.json Configuration[/bold cyan]")
+        console.print()
+
+        # Show team vs personal split using Panels
+        from rich.panel import Panel
+
+        team_fields = list(scan_result.settings.team_fields.keys())
+        personal_fields = list(scan_result.settings.personal_fields.keys())
+
+        team_text = "\n".join(f"  • {field}" for field in team_fields)
+        personal_text = "\n".join(f"  • {field}" for field in personal_fields)
+
+        console.print(Panel(
+            f"[bold]Team Fields[/bold] (included in config):\n{team_text}",
+            border_style="green",
+            padding=(1, 2),
+        ))
+        console.print()
+        console.print(Panel(
+            f"[bold]Personal Fields[/bold] (excluded):\n{personal_text}",
+            border_style="dim",
+            padding=(1, 2),
+        ))
+        console.print()
+
+        # Optional: edit permissions.allow
+        if "permissions" in scan_result.settings.team_fields:
+            current_allow = scan_result.settings.team_fields["permissions"].get("allow", [])
+            if questionary.confirm("Edit permissions.allow list?", default=False).ask():
+                selected_allow = questionary.checkbox(
+                    "Select allowed permissions:",
+                    choices=[
+                        {"name": perm, "value": perm, "checked": True}
+                        for perm in current_allow
+                    ],
+                ).ask()
+                if selected_allow is not None:
+                    custom_allow = selected_allow
+                else:
+                    custom_allow = current_allow
+            else:
+                custom_allow = current_allow
+        else:
+            custom_allow = None
+
+        # Optional: edit enabledPlugins
+        custom_plugins = None
+        if "enabledPlugins" in scan_result.settings.team_fields:
+            current_plugins = scan_result.settings.team_fields["enabledPlugins"]
+            if questionary.confirm("Edit enabled plugins?", default=False).ask():
+                # For plugins, we can't easily use checkbox (it's a dict)
+                # Just ask if they want to keep it
+                if not questionary.confirm("Keep current plugin configuration?", default=True).ask():
+                    custom_plugins = {}
+                else:
+                    custom_plugins = current_plugins
+            else:
+                custom_plugins = current_plugins
+
+        # Filter settings
+        settings = filter_settings_for_team(
+            scan_result.settings,
+            custom_allow=custom_allow,
+            custom_plugins=custom_plugins,
+        )
+
+    # Step 6: Plugins handling
+    plugins = scan_result.plugins
+    if plugins:
+        console.print(f"\n[cyan]ℹ[/cyan] Found {len(plugins)} installed plugins")
+        if questionary.confirm("Include all plugins in config?", default=True).ask():
+            # Optional: edit plugin list
+            if questionary.confirm("Edit plugin list?", default=False).ask():
+                selected_plugins = questionary.checkbox(
+                    "Select plugins to include:",
+                    choices=[
+                        {"name": p["name"], "value": p, "checked": True}
+                        for p in plugins
+                    ],
+                ).ask()
+                if selected_plugins is not None:
+                    plugins = selected_plugins
+        else:
+            plugins = []
+
+    # Step 7: Output directory
+    console.print()
+    default_output = str(Path.home() / "claude-config")
+    output_dir_str = questionary.path(
+        "Output directory:",
+        default=default_output,
+    ).ask()
+
+    if output_dir_str is None:
+        print_warning("Cancelled.")
+        return
+
+    output_dir = Path(output_dir_str).expanduser()
+
+    # Step 8: Overwrite check
+    force = False
+    if output_dir.exists() and any(output_dir.iterdir()):
+        print_warning(f"Directory {output_dir} already exists and is not empty")
+
+        # List first 10 files
+        existing_files = list(output_dir.rglob("*"))[:10]
+        console.print("\n[bold]Existing files:[/bold]")
+        for f in existing_files:
+            if f.is_file():
+                rel = f.relative_to(output_dir)
+                console.print(f"  • {rel}")
+
+        remaining = len(list(output_dir.rglob("*"))) - 10
+        if remaining > 0:
+            console.print(f"  [dim]... and {remaining} more[/dim]")
+
+        console.print()
+        if not questionary.confirm("Overwrite existing directory?", default=False).ask():
+            print_warning("Cancelled.")
+            return
+
+        force = True
+
+    # Step 9: Config name
+    config_name = questionary.text(
+        "Configuration name:",
+        default="team-config",
+    ).ask()
+
+    if config_name is None:
+        print_warning("Cancelled.")
+        return
+
+    # Step 10: Git init
+    init_git = questionary.confirm(
+        "Initialize git repository?",
+        default=True,
+    ).ask()
+
+    if init_git is None:
+        init_git = True
+
+    # Step 11: Build plan and preview
+    plan = ConfigPlan(
+        output_dir=output_dir,
+        selected_files=selected_files,
+        settings=settings,
+        plugins=plugins,
+        init_git=init_git,
+        config_name=config_name,
+    )
+
+    console.print()
+    preview = preview_config_plan(plan)
+    show_config_preview(preview)
+
+    # Step 12: Final confirmation
+    console.print()
+    if not questionary.confirm("Generate config repository?", default=True).ask():
+        print_warning("Cancelled.")
+        return
+
+    # Step 13: Generate
+    try:
+        generated_path = generate_config_repo(plan, force=force)
+        console.print()
+        print_success(f"Config repository created at {generated_path}")
+
+        # Step 14: Show next steps
+        console.print("\n[bold green]✓ Config repository created![/bold green]")
+        console.print("\n[bold]Next steps:[/bold]")
+        console.print(f"  1. Review the generated files in [cyan]{generated_path}[/cyan]")
+        console.print("  2. Commit to git and push to GitHub:")
+        console.print(f"     [dim]cd {generated_path}[/dim]")
+        console.print(f"     [dim]git add .[/dim]")
+        console.print(f"     [dim]git commit -m 'Initial config'[/dim]")
+        console.print(f"     [dim]git remote add origin <your-repo-url>[/dim]")
+        console.print(f"     [dim]git push -u origin main[/dim]")
+        console.print("  3. Team members can install with:")
+        console.print(f"     [cyan]claude-setup init --github your-org/repo-name[/cyan]")
+        console.print(f"     [cyan]claude-setup install[/cyan]\n")
+
+    except Exception as e:
+        print_error(f"Failed to generate config: {e}")
+
+
+@app.command(name="create-config")
+def create_config(
+    output_dir: Optional[str] = typer.Option(None, "--output", "-o", help="Output directory for config repo"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Show what would be generated without creating files"),
+    no_git: bool = typer.Option(False, "--no-git", help="Skip git init"),
+    all_categories: bool = typer.Option(False, "--all", help="Include all categories without prompting"),
+):
+    """Create a new config repository from your current ~/.claude setup."""
+    show_banner(__version__)
+
+    # Get claude_dir
+    claude_dir = get_claude_dir()
+
+    # Verify ~/.claude exists
+    if not claude_dir.exists():
+        print_error(f"Directory {claude_dir} does not exist")
+        console.print("\n[bold]This command requires an existing ~/.claude directory.[/bold]")
+        console.print("Run [cyan]claude-setup install[/cyan] first to set up your configuration.\n")
+        raise typer.Exit(1)
+
+    # Scan ~/.claude
+    try:
+        scan_result = scan_claude_dir(claude_dir)
+    except Exception as e:
+        print_error(f"Failed to scan {claude_dir}: {e}")
+        raise typer.Exit(1)
+
+    # Select all files if --all flag
+    selected_files = scan_result.files
+    settings = None
+    if scan_result.settings:
+        settings = filter_settings_for_team(scan_result.settings)
+    plugins = scan_result.plugins
+
+    # Build plan
+    output_path = Path(output_dir if output_dir else Path.home() / "claude-config")
+    plan = ConfigPlan(
+        output_dir=output_path,
+        selected_files=selected_files,
+        settings=settings,
+        plugins=plugins,
+        init_git=not no_git,
+        config_name=output_path.name,
+    )
+
+    # Preview
+    preview = preview_config_plan(plan)
+    show_config_preview(preview)
+
+    if dry_run:
+        print_info("Dry run complete. No files created.")
+        raise typer.Exit(0)
+
+    # Confirm
+    if not confirm(f"Generate config repo at {output_path}?"):
+        print_warning("Cancelled.")
+        raise typer.Exit(0)
+
+    # Generate
+    try:
+        generated_path = generate_config_repo(plan)
+        print_success(f"Config repository created at {generated_path}")
+
+        # Show next steps
+        console.print("\n[bold green]✓ Config repository created![/bold green]")
+        console.print("\n[bold]Next steps:[/bold]")
+        console.print(f"  1. Review the generated files in [cyan]{generated_path}[/cyan]")
+        console.print("  2. Commit to git and push to GitHub")
+        console.print("  3. Team members can install with:")
+        console.print(f"     [cyan]claude-setup init --github your-org/repo-name[/cyan]")
+        console.print(f"     [cyan]claude-setup install[/cyan]\n")
+
+    except FileExistsError as e:
+        print_error(str(e))
+        console.print("\n[bold]To overwrite:[/bold]")
+        console.print("  • Delete the directory and run again")
+        console.print("  • Or use the interactive wizard for more control\n")
+        raise typer.Exit(1)
+    except Exception as e:
+        print_error(f"Failed to generate config: {e}")
+        raise typer.Exit(1)
 
 
 @app.command()

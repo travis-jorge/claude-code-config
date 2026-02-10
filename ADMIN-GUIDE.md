@@ -14,6 +14,24 @@ This guide is for administrators who want to set up `claude-setup` for their tea
 
 ### Step 1: Create Your Config Repository
 
+**Option A: From your existing setup (Recommended)**
+
+If you already have a configured `~/.claude` setup that you want to share with your team:
+
+```bash
+claude-setup create-config --output ~/my-claude-config
+```
+
+This will:
+- Scan your `~/.claude` directory
+- Guide you through selecting what to include
+- Separate team settings from personal settings
+- Generate a properly structured config repo
+
+**Option B: From template**
+
+If you're starting from scratch:
+
 ```bash
 # Copy the template
 cp -r examples/config-template/ my-claude-config/
@@ -75,6 +93,88 @@ EOF
 
 claude-setup install --all
 ```
+
+---
+
+## Creating Config from Existing Setup
+
+The easiest way to create a team config is to use the `create-config` command, which bootstraps a new config repo from your existing `~/.claude` setup.
+
+### Interactive Wizard
+
+Run the wizard to walk through the process:
+
+```bash
+claude-setup create-config
+```
+
+Or use it from the main menu:
+
+```bash
+claude-setup
+# Select "🏗️ Create Config Repo"
+```
+
+### What the Wizard Does
+
+1. **Backs up your ~/.claude** - Creates a safety backup before any operations
+2. **Scans your setup** - Finds all files in your `~/.claude` directory
+3. **Classifies files** - Groups files into categories (core, agents, rules, commands)
+4. **Separates settings** - Distinguishes team settings from personal settings
+5. **Lets you customize** - Choose what to include, edit permissions and plugins
+6. **Generates the repo** - Creates a properly structured config repository
+7. **Initializes git** - Optionally sets up a git repository
+
+### Settings Classification
+
+The wizard automatically separates **team settings** from **personal settings**:
+
+**Team Settings (included in config):**
+- `model` - Default model for the team
+- `statusLine` - Team's custom status line
+- `alwaysThinkingEnabled` - Team preference for thinking display
+- `permissions.allow` - Commands the team can use freely
+- `enabledPlugins` - Plugins required for the team
+
+**Personal Settings (excluded from config):**
+- `permissions.deny` - User's blocked commands
+- `permissions.ask` - User's prompt-on-use commands
+- `feedbackSurveyState` - User's survey state
+- Custom user preferences
+
+This ensures that team members keep their personal preferences while adopting team standards.
+
+### Command Line Options
+
+```bash
+# Generate with specific output directory
+claude-setup create-config --output ~/my-team-config
+
+# Preview without creating files
+claude-setup create-config --dry-run
+
+# Skip git initialization
+claude-setup create-config --no-git
+
+# Non-interactive: include all categories
+claude-setup create-config --all --output ~/my-config
+```
+
+### After Generation
+
+Once the config repo is created:
+
+1. **Review the generated files** in the output directory
+2. **Customize as needed** - Edit CLAUDE.md, add rules, etc.
+3. **Commit to git** (if not auto-initialized):
+   ```bash
+   cd my-claude-config
+   git init
+   git add .
+   git commit -m "Initial team config"
+   ```
+4. **Push to GitHub** - Share with your team
+5. **Team installs** using the source URL
 
 ---
 
@@ -496,20 +596,23 @@ claude-setup install --all
 
 ## Example: Complete Setup for Acme Corp
 
+### 1. Create the config repo from your setup
+
 ```bash
-# 1. Create config repo
-gh repo create acme-corp/claude-config --private
-git clone git@github.com:acme-corp/claude-config.git
-cd claude-config
+# Use your existing configured ~/.claude
+claude-setup create-config --output ~/acme-claude-config
 
-# 2. Copy template
-cp -r /path/to/claude-setup/examples/config-template/* .
+cd acme-claude-config
+```
 
-# 3. Customize
-cat > config/core/CLAUDE.md << 'EOF'
-# Acme Corp Claude Code Configuration
+### 2. Customize for your organization
 
-## Coding Standards
+Edit the generated files:
+```bash
+# Customize CLAUDE.md with company standards
+cat >> config/core/CLAUDE.md << 'EOF'
+
+## Acme Corp Coding Standards
 - Use TypeScript for all new projects
 - Follow ESLint rules
 - Write tests for all features
@@ -519,13 +622,23 @@ cat > config/core/CLAUDE.md << 'EOF'
 - Use vault for secrets
 - Follow least-privilege access
 EOF
+```
 
-# 4. Commit and push
+### 3. Commit and push
+
+```bash
 git add .
 git commit -m "Initial Acme Corp config"
-git push
 
-# 5. Create setup script for team
+# Create GitHub repo and push
+gh repo create acme-corp/claude-config --private
+git remote add origin git@github.com:acme-corp/claude-config.git
+git push -u origin main
+```
+
+### 4. Create setup script for team
+
+```bash
 cat > setup.sh << 'EOF'
 #!/bin/bash
 git clone https://github.com/travis-jorge/claude-code-config.git ~/claude-setup
