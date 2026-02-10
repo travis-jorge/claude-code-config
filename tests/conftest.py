@@ -103,3 +103,162 @@ def existing_settings():
             "lastShownTime": 1234567890,
         },
     }
+
+
+@pytest.fixture
+def populated_claude_dir(temp_dir):
+    """Create a realistic populated ~/.claude directory for testing create-config feature.
+
+    Creates a complete directory structure with:
+    - Core files (CLAUDE.md, settings.json, statusline.sh)
+    - Agent files
+    - Rules files
+    - Commands (with nested structure)
+    - Plugins
+    - Files that should be skipped (backups, sources, etc.)
+    """
+    claude_dir = temp_dir / ".claude"
+    claude_dir.mkdir()
+
+    # Core files
+    (claude_dir / "CLAUDE.md").write_text(
+        "# Claude Code Instructions\n\n"
+        "This is a sample CLAUDE.md file with instructions for Claude.\n\n"
+        "## Project Overview\n\n"
+        "This is a test project.\n"
+    )
+
+    # settings.json with all field types
+    settings = {
+        "$schema": "https://schemas.anthropic.com/claude-code/settings.json",
+        "model": "opusplan",
+        "statusLine": {
+            "type": "command",
+            "command": "bash {{HOME}}/.claude/statusline.sh",
+        },
+        "alwaysThinkingEnabled": True,
+        "permissions": {
+            "allow": ["Bash", "Read", "Write", "Edit"],
+            "deny": ["WebFetch", "WebSearch"],
+            "ask": ["Glob", "Grep"],
+        },
+        "enabledPlugins": {
+            "test-plugin@author": True,
+            "another-plugin@org": {"enabled": True, "config": {"key": "value"}},
+        },
+        "feedbackSurveyState": {
+            "lastShownTime": 1234567890,
+            "dismissed": False,
+        },
+        "customTeamField": "team-value",
+        "userCustomField": "user-value",
+    }
+    (claude_dir / "settings.json").write_text(json.dumps(settings, indent=2))
+
+    # statusline.sh (executable)
+    statusline_path = claude_dir / "statusline.sh"
+    statusline_path.write_text(
+        "#!/bin/bash\n"
+        "# Sample statusline script\n"
+        'echo "Project: $(basename $PWD)"\n'
+    )
+    statusline_path.chmod(0o755)
+
+    # Agent files
+    agents_dir = claude_dir / "agents"
+    agents_dir.mkdir()
+
+    (agents_dir / "test-agent.md").write_text(
+        "# Test Agent\n\n"
+        "This is a sample agent definition.\n\n"
+        "## Capabilities\n\n"
+        "- Task 1\n"
+        "- Task 2\n"
+    )
+
+    (agents_dir / "another-agent.md").write_text(
+        "# Another Agent\n\n"
+        "This agent handles different tasks.\n\n"
+        "## Usage\n\n"
+        "Use this agent for specific workflows.\n"
+    )
+
+    # Rules files
+    rules_dir = claude_dir / "rules"
+    rules_dir.mkdir()
+
+    (rules_dir / "team-rule.md").write_text(
+        "# Team Rule\n\n"
+        "This is a team-wide rule that all members should follow.\n\n"
+        "## Guidelines\n\n"
+        "1. Follow convention A\n"
+        "2. Follow convention B\n"
+    )
+
+    # Commands structure (with nested directories)
+    commands_dir = claude_dir / "commands"
+    commands_dir.mkdir()
+
+    simple_cmd = commands_dir / "simple-command.sh"
+    simple_cmd.write_text(
+        "#!/bin/bash\n"
+        "# Simple command\n"
+        'echo "Running simple command"\n'
+    )
+    simple_cmd.chmod(0o755)
+
+    nested_dir = commands_dir / "nested"
+    nested_dir.mkdir()
+
+    deep_cmd = nested_dir / "deep-command.py"
+    deep_cmd.write_text(
+        "#!/usr/bin/env python3\n"
+        "# Nested command\n"
+        'print("Running nested command")\n'
+    )
+    deep_cmd.chmod(0o755)
+
+    # Plugins
+    plugins_dir = claude_dir / "plugins"
+    plugins_dir.mkdir()
+
+    installed_plugins = {
+        "test-plugin@author": {
+            "description": "A test plugin",
+            "version": "1.0.0",
+        },
+        "another-plugin@org": {
+            "description": "Another plugin",
+            "version": "2.1.0",
+            "config": {"enabled": True},
+        },
+    }
+    (plugins_dir / "installed_plugins.json").write_text(json.dumps(installed_plugins, indent=2))
+
+    # Files that should be skipped
+    # Backups directory
+    backups_dir = claude_dir / "backups" / "backup-2024-01-01"
+    backups_dir.mkdir(parents=True)
+    (backups_dir / "CLAUDE.md").write_text("# Old backup")
+
+    # Sources directory
+    sources_dir = claude_dir / "sources" / "cached-source"
+    sources_dir.mkdir(parents=True)
+    (sources_dir / "manifest.json").write_text("{}")
+
+    # Version file (should be skipped)
+    (claude_dir / ".claude-setup-version.json").write_text(
+        json.dumps({"version": "1.0.0", "timestamp": "2024-01-01T00:00:00"})
+    )
+
+    # sources.json (should be skipped)
+    (claude_dir / "sources.json").write_text(
+        json.dumps({"sources": [{"type": "local", "path": "/some/path"}]})
+    )
+
+    # Plans directory (should be skipped)
+    plans_dir = claude_dir / "plans"
+    plans_dir.mkdir()
+    (plans_dir / "some-plan.md").write_text("# Some plan")
+
+    return claude_dir

@@ -10,6 +10,7 @@ Perfect for teams who want to standardize their Claude Code setup across develop
 - 🔌 **Pluggable Sources** - GitHub repos, zip files, or local directories
 - 📦 **Category-based Installation** - Install only what you need
 - 💾 **Smart Settings Merge** - Preserve user customizations
+- 🏗️ **Config Bootstrapping** - Generate config repos from existing setups with automatic team/personal settings separation
 - 🔄 **Automatic Backups** - Safe, reversible updates
 - 🔌 **Plugin Management** - Auto-detect and install required plugins
 - 🎯 **Update Detection** - Know when new config is available
@@ -48,11 +49,16 @@ claude-setup plugins
 
 See **[ADMIN-GUIDE.md](ADMIN-GUIDE.md)** for complete instructions.
 
-**TL;DR:**
-1. Copy `examples/config-template/` to create your config repo
-2. Customize for your team
-3. Push to GitHub (or host as zip)
-4. Team uses `claude-setup init --github your-org/claude-config`
+**Quick Start:**
+```bash
+# Create a config from your existing setup (recommended)
+claude-setup create-config --output ~/my-org-config
+
+# Or start from template
+cp -r examples/config-template/ my-org-config/
+cd my-org-config/
+# Customize...
+```
 
 ## 📖 Usage
 
@@ -94,6 +100,9 @@ claude-setup backups
 
 # Rollback if needed
 claude-setup rollback
+
+# Create a config repo from your ~/.claude setup
+claude-setup create-config
 ```
 
 ## 🏗️ Architecture
@@ -217,26 +226,26 @@ claude-setup install --all
 
 ### Example 2: Creating Your Own Config
 
+Administrators can bootstrap a config from their working setup:
+
 ```bash
-# 1. Copy template
-cp -r examples/config-template/ my-company-config/
-cd my-company-config/
+# Generate config from your ~/.claude
+claude-setup create-config --output ~/my-org-config
 
-# 2. Customize
-vim config/core/CLAUDE.md
-vim config/core/settings.json
+# Review and customize
+cd my-org-config
+# Edit CLAUDE.md, add team rules, etc.
 
-# 3. Push to GitHub
-git init
-git add .
-git commit -m "Initial config"
-git remote add origin git@github.com:my-org/claude-config.git
+# Push to GitHub
+git remote add origin https://github.com/your-org/claude-config.git
 git push -u origin main
 
-# 4. Use it
-claude-setup init --github my-org/claude-config
+# Team members install
+claude-setup init --github your-org/claude-config
 claude-setup install --all
 ```
+
+See [ADMIN-GUIDE.md](ADMIN-GUIDE.md#creating-config-from-existing-setup) for detailed instructions.
 
 ### Example 3: Enterprise Setup with Zip Distribution
 

@@ -45,6 +45,10 @@ claude-setup
 # Test with example config
 claude-setup init --local examples/config-template
 claude-setup install --all --dry-run
+
+# Create a config repo from existing ~/.claude
+claude-setup create-config --output /tmp/test-config
+claude-setup create-config --dry-run
 ```
 
 ## Architecture
@@ -96,6 +100,14 @@ Sources are cached in `~/.claude/sources/` to avoid repeated fetches.
 - Supports legacy `backup-*` format
 - Stores manifest with categories and file list
 - Rollback restores from backup directory
+
+**`create_config.py`** - Config repo generation:
+- Scans ~/.claude directory and classifies files by category
+- Separates team settings from personal settings in settings.json
+- Applies reverse template resolution (home dir → {{HOME}})
+- Generates properly structured config repos with manifest.json
+- Optionally initializes git repository
+- Used by create-config command and wizard
 
 **`version.py`** - Update detection:
 - Version stamp: `~/.claude/.claude-setup-version.json`
@@ -172,10 +184,19 @@ See `examples/config-template/` for a complete template.
 
 When run without arguments, `cli.py` launches `interactive_menu()`:
 1. Shows main menu (questionary.select)
-2. User selects action → calls `interactive_install()`, `interactive_plugins()`, etc.
+2. User selects action → calls `interactive_install()`, `interactive_plugins()`, `interactive_create_config()`, etc.
 3. Each function handles its workflow with prompts
 4. Returns to main menu with `press_any_key_to_continue()`
 5. `console.clear()` between iterations
+
+**Menu options:**
+- Install Configuration → `interactive_install()` (category selection wizard)
+- Check Status → shows version and update status
+- Manage Plugins → `interactive_plugins()` (plugin installation wizard)
+- View Backups → lists available backups
+- Rollback → `interactive_rollback()` (backup selection wizard)
+- Check for Updates → update detection and installation
+- Create Config Repo → `interactive_create_config()` (scans ~/.claude, wizard for generation)
 
 ### Installation Flow
 
