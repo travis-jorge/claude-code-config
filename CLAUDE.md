@@ -8,6 +8,12 @@ Claude Setup is a pluggable CLI tool for managing Claude Code team configuration
 
 **Key Architecture Principle**: Clean separation between tool and configuration. This repo contains the tool only; configuration is fetched from sources defined in `~/.claude/sources.json`.
 
+**Current Version**: 3.4.0
+- Added beginner-friendly init wizard with 5 intuitive options
+- Consistent git clone behavior for all repository types
+- Admin functions separated into dedicated submenu
+- Automated CI/CD with GitHub Actions
+
 ## Development Commands
 
 ### Setup
@@ -65,11 +71,18 @@ The tool never contains company-specific configuration. It fetches config from s
 **Flow**: `sources.json` → `SourceManager` → `LocalSource`/`GitHubSource`/`ZipSource` → cached config → `CategoryRegistry` → `Installer`
 
 **Source Types** (`src/claude_setup/sources.py`):
-- `LocalSource` - Copy from filesystem path
+- `LocalSource` - Copy from filesystem path (used for all wizard-cloned repos in v3.4.0+)
 - `GitHubSource` - Clone/pull from GitHub (supports private repos with tokens)
 - `ZipSource` - Download and extract from HTTP/HTTPS URL
 
 Sources are cached in `~/.claude/sources/` to avoid repeated fetches.
+
+**Init Wizard Behavior** (v3.4.0+):
+- All git repositories cloned via wizard are stored as `type: "local"` sources
+- Clone location is user-specified (default: `~/.claude/sources/{repo-name}`)
+- Updates use standard `git pull` on tracked local directories
+- Consistent behavior regardless of git hosting provider (GitHub/GitLab/Bitbucket/etc)
+- GitHub detection is informational only (shows GITHUB_TOKEN availability for private repos)
 
 ### Core Modules
 
@@ -126,6 +139,36 @@ Sources are cached in `~/.claude/sources/` to avoid repeated fetches.
 **`init.py`** - Source initialization:
 - Checks for sources in order: `~/.claude/sources.json`, `.claude-setup-sources.json`, fallback
 - Creates default sources configuration
+- `validate_config_source()` - Validates config directories with manifest.json checking
+- Handles nested directory structures (zip extractions with wrapper dirs)
+
+### Init Wizard (v3.4.0+)
+
+**Beginner-friendly wizard** that replaces technical source type selection with intuitive guided setup:
+
+**Main Entry Points**:
+- `interactive_init_wizard()` - Main wizard with 5 options
+- Accessible from CLI (`claude-setup init`) or interactive menu
+
+**Wizard Functions**:
+- `_wizard_from_scratch()` - Create config from current ~/.claude and use immediately
+- `_wizard_from_zip()` - Extract zip file, validate, and set as source
+- `_wizard_from_git()` - Routes between clone new repo or use existing repo
+- `_wizard_git_clone()` - Clone any git repo (GitHub/GitLab/etc) with path selection
+- `_wizard_git_existing()` - Use existing local git repository
+- `_wizard_advanced()` - Copy custom sources.json file
+
+**Utility Functions**:
+- `_parse_github_url()` - Parse various GitHub URL formats (informational)
+- `_detect_github_remote()` - Detect GitHub remote from local repo (informational)
+
+**Clone Behavior** (v3.4.0+):
+- All git repositories cloned immediately during wizard
+- User prompted for clone location (default: `~/.claude/sources/{repo-name}`)
+- All repos stored as `type: "local"` with tracked paths
+- GitHub detection is informational only (shows GITHUB_TOKEN availability)
+- Updates use `git pull` on tracked local directories
+- Consistent behavior regardless of git hosting provider
 
 ### Configuration Structure
 
@@ -189,14 +232,22 @@ When run without arguments, `cli.py` launches `interactive_menu()`:
 4. Returns to main menu with `press_any_key_to_continue()`
 5. `console.clear()` between iterations
 
-**Menu options:**
+**Main Menu options** (v3.4.0+):
+- Setup Configuration → `interactive_init_wizard()` (beginner-friendly wizard)
 - Install Configuration → `interactive_install()` (category selection wizard)
 - Check Status → shows version and update status
 - Manage Plugins → `interactive_plugins()` (plugin installation wizard)
 - View Backups → lists available backups
 - Rollback → `interactive_rollback()` (backup selection wizard)
 - Check for Updates → update detection and installation
-- Create Config Repo → `interactive_create_config()` (scans ~/.claude, wizard for generation)
+- Advanced/Admin Tools → `interactive_admin_menu()` (admin submenu)
+- Exit
+
+**Admin Submenu** (v3.4.0+):
+- Create Config Repo (for sharing) → `interactive_create_config()` (scans ~/.claude, wizard for generation)
+- Back to Main Menu
+
+The admin submenu separates config creation (admin task) from config usage (end user task) for better UX.
 
 ### Installation Flow
 
@@ -225,6 +276,30 @@ Tests use `conftest.py` fixtures:
 - `test_backup.py` - Backup creation, listing, restoration, cleanup
 - `test_installer.py` - Installation flow, dry-run, file copying, template resolution
 - `test_categories.py` - Manifest loading, file discovery
+
+### CI/CD with GitHub Actions (v3.4.0+)
+
+**Workflow**: `.github/workflows/test.yml`
+
+**Test Job**:
+- Matrix testing across Python 3.10, 3.11, and 3.12
+- Automated pytest execution with coverage reporting
+- Coverage upload to Codecov (requires `CODECOV_TOKEN` secret)
+- Pip caching for faster builds
+
+**Lint Job**:
+- Black code formatting checks
+- isort import sorting checks
+- flake8 linting checks
+- All linting set to `continue-on-error: true` (informational only)
+
+**Triggers**:
+- All pull requests to `main`
+- All pushes to `main` branch
+
+**Branch Protection**:
+- Require all test jobs to pass before merging PRs
+- Ensures code quality and prevents regressions
 
 ### Template Variable System
 
