@@ -4,8 +4,13 @@
 
 Perfect for teams who want to standardize their Claude Code setup across developers while keeping control of their configuration.
 
+[![Tests](https://github.com/travis-jorge/claude-code-config/actions/workflows/test.yml/badge.svg)](https://github.com/travis-jorge/claude-code-config/actions/workflows/test.yml)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
 ## ✨ Features
 
+- ✨ **Beginner-Friendly Wizard** (v3.4.0+) - Intuitive setup with 5 simple options
 - 🎨 **Interactive Menu** - Navigate all features with arrow keys
 - 🔌 **Pluggable Sources** - GitHub repos, zip files, or local directories
 - 📦 **Category-based Installation** - Install only what you need
@@ -15,6 +20,7 @@ Perfect for teams who want to standardize their Claude Code setup across develop
 - 🔌 **Plugin Management** - Auto-detect and install required plugins
 - 🎯 **Update Detection** - Know when new config is available
 - 🎨 **Rich Terminal UI** - Beautiful, informative output
+- 🧪 **Automated Testing** (v3.4.0+) - GitHub Actions CI for quality assurance
 
 ## 🚀 Quick Start
 
@@ -22,13 +28,31 @@ Perfect for teams who want to standardize their Claude Code setup across develop
 
 Your admin should provide you with either a setup script or source configuration.
 
-**Option 1: Using setup script**
+**Option 1: Using the Interactive Wizard (Easiest - v3.4.0+)**
 ```bash
-# Run the script provided by your admin
-bash setup-claude.sh
+# 1. Install tool
+git clone https://github.com/travis-jorge/claude-code-config.git
+cd claude-setup
+pip install -e .
+
+# 2. Run the beginner-friendly wizard
+claude-setup init
+# Or just: claude-setup (then choose "Setup Configuration")
+
+# The wizard will guide you through:
+# - Using a zip file with pre-made config
+# - Cloning a git repository
+# - Creating config from scratch
+# - Or advanced custom setup
+
+# 3. Install configuration
+claude-setup install --all
+
+# 4. Check plugins
+claude-setup plugins
 ```
 
-**Option 2: Manual setup**
+**Option 2: Direct command (if you know the source)**
 ```bash
 # 1. Install tool
 git clone https://github.com/travis-jorge/claude-code-config.git
@@ -37,6 +61,8 @@ pip install -e .
 
 # 2. Initialize with your organization's config
 claude-setup init --github your-org/claude-config
+# Or: claude-setup init --local /path/to/config
+# Or: claude-setup init --zip https://example.com/config.zip
 
 # 3. Install configuration
 claude-setup install --all
@@ -70,18 +96,25 @@ claude-setup
 ```
 
 Navigate with arrow keys through:
+- ⚙️ **Setup Configuration** (v3.4.0+) - Beginner-friendly wizard
 - 📦 Install Configuration
 - 📊 Check Installation Status
 - 🔌 Manage Plugins
 - 💾 View Backups
 - ⏮️ Rollback to Backup
 - 🔄 Check for Updates
+- 🔧 **Advanced/Admin Tools** (v3.4.0+) - Create config repos for sharing
 
 ### Command Line
 
 ```bash
-# Initialize sources
+# Run beginner-friendly wizard (v3.4.0+)
+claude-setup init
+
+# Or initialize sources directly
 claude-setup init --github your-org/claude-config
+claude-setup init --local /path/to/config
+claude-setup init --zip https://example.com/config.zip
 
 # Install everything
 claude-setup install --all
