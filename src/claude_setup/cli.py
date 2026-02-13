@@ -1,6 +1,11 @@
 """CLI interface using Typer."""
 
 import json
+import os
+import re
+import shutil
+import subprocess
+import zipfile
 from pathlib import Path
 from typing import Optional
 
@@ -92,6 +97,72 @@ def initialize_managers():
     installer = Installer(config_dir, claude_dir, registry, backup_mgr, version_mgr)
 
     return registry, backup_mgr, version_mgr, plugin_mgr, installer
+
+
+def _parse_github_url(url: str) -> Optional[tuple[str, str]]:
+    """Parse GitHub URL into owner/repo tuple.
+
+    Supports formats:
+    - https://github.com/owner/repo(.git)
+    - git@github.com:owner/repo(.git)
+    - github.com/owner/repo
+
+    Args:
+        url: GitHub URL string
+
+    Returns:
+        Tuple of (owner, repo) or None if not a GitHub URL
+    """
+    # Remove .git suffix if present
+    url = url.rstrip("/")
+    if url.endswith(".git"):
+        url = url[:-4]
+
+    # Pattern 1: https://github.com/owner/repo
+    match = re.match(r"^https?://github\.com/([^/]+)/([^/]+)/?$", url)
+    if match:
+        return match.group(1), match.group(2)
+
+    # Pattern 2: git@github.com:owner/repo
+    match = re.match(r"^git@github\.com:([^/]+)/([^/]+)/?$", url)
+    if match:
+        return match.group(1), match.group(2)
+
+    # Pattern 3: github.com/owner/repo (without protocol)
+    match = re.match(r"^github\.com/([^/]+)/([^/]+)/?$", url)
+    if match:
+        return match.group(1), match.group(2)
+
+    return None
+
+
+def _detect_github_remote(repo_path: Path) -> Optional[str]:
+    """Detect GitHub remote from a git repository.
+
+    Args:
+        repo_path: Path to git repository
+
+    Returns:
+        String "owner/repo" or None if no GitHub remote found
+    """
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(repo_path), "remote", "get-url", "origin"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        remote_url = result.stdout.strip()
+
+        parsed = _parse_github_url(remote_url)
+        if parsed:
+            owner, repo = parsed
+            return f"{owner}/{repo}"
+
+        return None
+
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return None
 
 
 @app.command()
@@ -521,6 +592,46 @@ def version():
     console.print(f"[bold cyan]claude-setup[/bold cyan] version [yellow]{__version__}[/yellow]")
 
 
+def interactive_admin_menu():
+    """Show admin/advanced tools submenu."""
+    console.clear()
+    show_banner(__version__)
+    console.print("\n[bold cyan]Advanced/Admin Tools[/bold cyan]")
+    console.print("[dim]These tools are for creating and managing configuration repositories.[/dim]\n")
+
+    while True:
+        try:
+            choice = questionary.select(
+                "What would you like to do?",
+                choices=[
+                    questionary.Choice("🏗️ Create Config Repo (for sharing)", value="create-config"),
+                    questionary.Choice("⬅️ Back to Main Menu", value="back"),
+                ],
+            ).ask()
+
+            if choice is None or choice == "back":
+                return
+
+            console.print()  # Add spacing
+
+            if choice == "create-config":
+                interactive_create_config()
+
+            # Pause before showing menu again
+            console.print()
+            questionary.press_any_key_to_continue("Press any key to return to menu...").ask()
+            console.clear()
+            show_banner(__version__)
+            console.print("\n[bold cyan]Advanced/Admin Tools[/bold cyan]")
+            console.print("[dim]These tools are for creating and managing configuration repositories.[/dim]\n")
+
+        except KeyboardInterrupt:
+            return
+        except Exception as e:
+            print_error(f"An error occurred: {e}")
+            questionary.press_any_key_to_continue("Press any key to continue...").ask()
+
+
 def interactive_menu():
     """Show interactive menu for navigating commands."""
     show_banner(__version__)
@@ -530,13 +641,14 @@ def interactive_menu():
             choice = questionary.select(
                 "What would you like to do?",
                 choices=[
+                    questionary.Choice("⚙️ Setup Configuration", value="init"),
                     questionary.Choice("📦 Install Configuration", value="install"),
                     questionary.Choice("📊 Check Installation Status", value="status"),
                     questionary.Choice("🔌 Manage Plugins", value="plugins"),
                     questionary.Choice("💾 View Backups", value="backups"),
                     questionary.Choice("⏮️ Rollback to Backup", value="rollback"),
                     questionary.Choice("🔄 Check for Updates", value="update"),
-                    questionary.Choice("🏗️ Create Config Repo", value="create-config"),
+                    questionary.Choice("🔧 Advanced/Admin Tools", value="admin"),
                     questionary.Choice("🚪 Exit", value="exit"),
                 ],
             ).ask()
@@ -547,7 +659,9 @@ def interactive_menu():
 
             console.print()  # Add spacing
 
-            if choice == "install":
+            if choice == "init":
+                interactive_init_wizard()
+            elif choice == "install":
                 interactive_install()
             elif choice == "status":
                 status()
@@ -559,8 +673,12 @@ def interactive_menu():
                 interactive_rollback()
             elif choice == "update":
                 interactive_update()
-            elif choice == "create-config":
-                interactive_create_config()
+            elif choice == "admin":
+                interactive_admin_menu()
+                # Clear and show main banner again after returning from admin menu
+                console.clear()
+                show_banner(__version__)
+                continue  # Skip the press any key prompt
 
             # Pause before showing menu again
             console.print()
@@ -822,15 +940,22 @@ def interactive_update():
         print_error(f"Update failed: {e}")
 
 
-def interactive_create_config():
-    """Interactive config repository creation wizard."""
+def interactive_create_config(show_next_steps: bool = True) -> Optional[Path]:
+    """Interactive config repository creation wizard.
+
+    Args:
+        show_next_steps: Whether to display next steps after generation
+
+    Returns:
+        Path to generated config directory on success, None on cancel/failure
+    """
     # Step 1: Verify ~/.claude exists
     claude_dir = get_claude_dir()
     if not claude_dir.exists():
         print_error(f"Directory {claude_dir} does not exist")
         console.print("\n[bold]This wizard requires an existing ~/.claude directory.[/bold]")
         console.print("Run [cyan]Install Configuration[/cyan] first to set up your configuration.\n")
-        return
+        return None
 
     # Step 2: Create backup first
     try:
@@ -855,7 +980,7 @@ def interactive_create_config():
     except Exception as e:
         print_warning(f"Could not create backup: {e}")
         if not questionary.confirm("Continue without backup?", default=False).ask():
-            return
+            return None
 
     # Step 3: Scan ~/.claude
     try:
@@ -866,7 +991,7 @@ def interactive_create_config():
         console.print()
     except Exception as e:
         print_error(f"Failed to scan {claude_dir}: {e}")
-        return
+        return None
 
     # Step 4: Category selection
     categories = ["core", "agents", "rules", "commands"]
@@ -880,11 +1005,11 @@ def interactive_create_config():
 
     if selected_categories is None:
         print_warning("Cancelled.")
-        return
+        return None
 
     if not selected_categories:
         print_warning("No categories selected.")
-        return
+        return None
 
     # Filter files by selected categories
     selected_files = [
@@ -990,7 +1115,7 @@ def interactive_create_config():
 
     if output_dir_str is None:
         print_warning("Cancelled.")
-        return
+        return None
 
     output_dir = Path(output_dir_str).expanduser()
 
@@ -1014,7 +1139,7 @@ def interactive_create_config():
         console.print()
         if not questionary.confirm("Overwrite existing directory?", default=False).ask():
             print_warning("Cancelled.")
-            return
+            return None
 
         force = True
 
@@ -1026,7 +1151,7 @@ def interactive_create_config():
 
     if config_name is None:
         print_warning("Cancelled.")
-        return
+        return None
 
     # Step 10: Git init
     init_git = questionary.confirm(
@@ -1055,7 +1180,7 @@ def interactive_create_config():
     console.print()
     if not questionary.confirm("Generate config repository?", default=True).ask():
         print_warning("Cancelled.")
-        return
+        return None
 
     # Step 13: Generate
     try:
@@ -1064,21 +1189,25 @@ def interactive_create_config():
         print_success(f"Config repository created at {generated_path}")
 
         # Step 14: Show next steps
-        console.print("\n[bold green]✓ Config repository created![/bold green]")
-        console.print("\n[bold]Next steps:[/bold]")
-        console.print(f"  1. Review the generated files in [cyan]{generated_path}[/cyan]")
-        console.print("  2. Commit to git and push to GitHub:")
-        console.print(f"     [dim]cd {generated_path}[/dim]")
-        console.print(f"     [dim]git add .[/dim]")
-        console.print(f"     [dim]git commit -m 'Initial config'[/dim]")
-        console.print(f"     [dim]git remote add origin <your-repo-url>[/dim]")
-        console.print(f"     [dim]git push -u origin main[/dim]")
-        console.print("  3. Team members can install with:")
-        console.print(f"     [cyan]claude-setup init --github your-org/repo-name[/cyan]")
-        console.print(f"     [cyan]claude-setup install[/cyan]\n")
+        if show_next_steps:
+            console.print("\n[bold green]✓ Config repository created![/bold green]")
+            console.print("\n[bold]Next steps:[/bold]")
+            console.print(f"  1. Review the generated files in [cyan]{generated_path}[/cyan]")
+            console.print("  2. Commit to git and push to GitHub:")
+            console.print(f"     [dim]cd {generated_path}[/dim]")
+            console.print(f"     [dim]git add .[/dim]")
+            console.print(f"     [dim]git commit -m 'Initial config'[/dim]")
+            console.print(f"     [dim]git remote add origin <your-repo-url>[/dim]")
+            console.print(f"     [dim]git push -u origin main[/dim]")
+            console.print("  3. Team members can install with:")
+            console.print(f"     [cyan]claude-setup init --github your-org/repo-name[/cyan]")
+            console.print(f"     [cyan]claude-setup install[/cyan]\n")
+
+        return generated_path
 
     except Exception as e:
         print_error(f"Failed to generate config: {e}")
+        return None
 
 
 @app.command(name="create-config")
@@ -1164,6 +1293,401 @@ def create_config(
         raise typer.Exit(1)
 
 
+def _wizard_from_scratch() -> Optional[dict]:
+    """Wizard: Create config from scratch using interactive_create_config.
+
+    Returns:
+        sources_config dict or None if cancelled
+    """
+    generated_path = interactive_create_config(show_next_steps=False)
+
+    if generated_path is None:
+        return None
+
+    # Build sources config with local source
+    sources_config = {
+        "version": "1.0",
+        "sources": [
+            {
+                "name": "local-config",
+                "type": "local",
+                "path": str(generated_path),
+            }
+        ],
+    }
+
+    return sources_config
+
+
+def _wizard_from_zip() -> Optional[dict]:
+    """Wizard: Extract and validate zip file as config source.
+
+    Returns:
+        sources_config dict or None if cancelled/failed
+    """
+    # Step 1: Ask for zip file path
+    zip_path_str = questionary.path(
+        "Path to zip file:",
+        validate=lambda x: x.endswith(".zip"),
+    ).ask()
+
+    if zip_path_str is None:
+        return None
+
+    zip_path = Path(zip_path_str).expanduser()
+
+    if not zip_path.exists():
+        print_error(f"Zip file not found: {zip_path}")
+        return None
+
+    # Step 2: Ask for extraction location
+    default_extract = str(Path.home() / ".claude" / "sources" / "config-from-zip")
+    extract_path_str = questionary.path(
+        "Extract to:",
+        default=default_extract,
+    ).ask()
+
+    if extract_path_str is None:
+        return None
+
+    extract_path = Path(extract_path_str).expanduser()
+
+    # Step 3: Extract zip file
+    try:
+        print_info(f"Extracting {zip_path.name}...")
+        extract_path.mkdir(parents=True, exist_ok=True)
+
+        with zipfile.ZipFile(zip_path, "r") as zf:
+            zf.extractall(extract_path)
+
+        # Handle single top-level directory (mirror ZipSource logic)
+        items = list(extract_path.iterdir())
+        if len(items) == 1 and items[0].is_dir():
+            temp_dir = extract_path.parent / f"{extract_path.name}_temp"
+            items[0].rename(temp_dir)
+            shutil.rmtree(extract_path)
+            temp_dir.rename(extract_path)
+
+        print_success(f"Extracted to {extract_path}")
+
+    except zipfile.BadZipFile:
+        print_error(f"Invalid zip file: {zip_path}")
+        return None
+    except Exception as e:
+        print_error(f"Failed to extract zip: {e}")
+        return None
+
+    # Step 4: Validate extracted config
+    from claude_setup.init import validate_config_source
+
+    is_valid, message, resolved_path = validate_config_source(extract_path)
+
+    if not is_valid:
+        print_error(f"Invalid config source: {message}")
+        # Clean up
+        if extract_path.exists():
+            shutil.rmtree(extract_path)
+        return None
+
+    # Use resolved path if manifest was found one level deep
+    final_path = resolved_path if resolved_path else extract_path
+
+    print_success(f"Valid config source: {message}")
+
+    # Build sources config
+    sources_config = {
+        "version": "1.0",
+        "sources": [
+            {
+                "name": "local-config",
+                "type": "local",
+                "path": str(final_path),
+            }
+        ],
+    }
+
+    return sources_config
+
+
+def _wizard_git_clone() -> Optional[dict]:
+    """Wizard: Clone a git repository and set up as source.
+
+    Returns:
+        sources_config dict or None if cancelled/failed
+    """
+    # Step 1: Ask for git URL
+    git_url = questionary.text(
+        "Git repository URL:",
+        validate=lambda x: len(x) > 0,
+    ).ask()
+
+    if git_url is None:
+        return None
+
+    # Step 2: Ask for branch
+    branch = questionary.text(
+        "Branch or tag:",
+        default="main",
+    ).ask()
+
+    if branch is None:
+        branch = "main"
+
+    # Step 3: Derive repo name and default location
+    repo_name = git_url.rstrip("/").split("/")[-1]
+    if repo_name.endswith(".git"):
+        repo_name = repo_name[:-4]
+
+    # Check if it's a GitHub repo for informational message
+    parsed = _parse_github_url(git_url)
+    if parsed:
+        owner, repo = parsed
+        console.print(f"[dim]Detected GitHub repository: {owner}/{repo}[/dim]")
+        if "GITHUB_TOKEN" in os.environ:
+            console.print("[dim]Will use GITHUB_TOKEN for authentication[/dim]")
+
+    # Step 4: Ask where to clone (for all repo types)
+    default_dest = str(Path.home() / ".claude" / "sources" / repo_name)
+    dest_path_str = questionary.path(
+        "Clone to:",
+        default=default_dest,
+    ).ask()
+
+    if dest_path_str is None:
+        return None
+
+    dest_path = Path(dest_path_str).expanduser()
+
+    # Step 5: Clone the repository
+    try:
+        print_info(f"Cloning {git_url}...")
+        subprocess.run(
+            ["git", "clone", "-b", branch, git_url, str(dest_path)],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        print_success(f"Cloned to {dest_path}")
+
+    except subprocess.CalledProcessError as e:
+        print_error(f"Git clone failed: {e.stderr}")
+        return None
+    except FileNotFoundError:
+        print_error("git command not found. Please install git.")
+        return None
+
+    # Step 6: Validate
+    from claude_setup.init import validate_config_source
+
+    is_valid, message, resolved_path = validate_config_source(dest_path)
+
+    if not is_valid:
+        print_error(f"Invalid config source: {message}")
+        return None
+
+    final_path = resolved_path if resolved_path else dest_path
+    print_success(f"Valid config source: {message}")
+
+    # Step 7: Build local source (same for all repo types)
+    sources_config = {
+        "version": "1.0",
+        "sources": [
+            {
+                "name": "local-config",
+                "type": "local",
+                "path": str(final_path),
+            }
+        ],
+    }
+
+    return sources_config
+
+
+def _wizard_git_existing() -> Optional[dict]:
+    """Wizard: Use an existing git repository on disk.
+
+    Returns:
+        sources_config dict or None if cancelled/failed
+    """
+    # Step 1: Ask for repo path
+    repo_path_str = questionary.path(
+        "Path to git repository:",
+        only_directories=True,
+    ).ask()
+
+    if repo_path_str is None:
+        return None
+
+    repo_path = Path(repo_path_str).expanduser()
+
+    # Step 2: Validate
+    from claude_setup.init import validate_config_source
+
+    is_valid, message, resolved_path = validate_config_source(repo_path)
+
+    if not is_valid:
+        print_error(f"Invalid config source: {message}")
+        return None
+
+    final_path = resolved_path if resolved_path else repo_path
+    print_success(f"Valid config source: {message}")
+
+    # Step 3: Detect GitHub remote (informational only)
+    github_remote = _detect_github_remote(repo_path)
+
+    if github_remote:
+        console.print(f"[dim]Detected GitHub remote: {github_remote}[/dim]")
+        if "GITHUB_TOKEN" in os.environ:
+            console.print("[dim]GITHUB_TOKEN available for authenticated updates[/dim]")
+
+    # Always use local source - updates will use git pull
+    sources_config = {
+        "version": "1.0",
+        "sources": [
+            {
+                "name": "local-config",
+                "type": "local",
+                "path": str(final_path),
+            }
+        ],
+    }
+
+    return sources_config
+
+
+def _wizard_from_git() -> Optional[dict]:
+    """Wizard: Git repository flow - route to clone or existing.
+
+    Returns:
+        sources_config dict or None if cancelled
+    """
+    choice = questionary.select(
+        "Is the repository already on your computer?",
+        choices=[
+            questionary.Choice("No, I need to clone it", value="clone"),
+            questionary.Choice("Yes, it's already on disk", value="existing"),
+        ],
+    ).ask()
+
+    if choice is None:
+        return None
+
+    if choice == "clone":
+        return _wizard_git_clone()
+    else:
+        return _wizard_git_existing()
+
+
+def _wizard_advanced() -> Optional[dict]:
+    """Wizard: Copy custom sources.json file.
+
+    Returns:
+        Sentinel value (empty dict) to skip create_default_sources, or None if cancelled
+    """
+    path = questionary.path("Path to sources.json file:").ask()
+
+    if path is None:
+        return None
+
+    source_path = Path(path)
+
+    if not source_path.exists():
+        print_error(f"File not found: {source_path}")
+        return None
+
+    claude_dir = get_claude_dir()
+    dest_path = claude_dir / "sources.json"
+
+    try:
+        dest_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy(source_path, dest_path)
+        print_success("Copied sources configuration")
+        # Return empty dict as sentinel to indicate sources.json already written
+        return {}
+    except Exception as e:
+        print_error(f"Failed to copy file: {e}")
+        return None
+
+
+def interactive_init_wizard():
+    """Interactive init wizard with beginner-friendly options."""
+    claude_dir = get_claude_dir()
+
+    # Welcome message
+    print_info("Welcome to Claude Setup! Let's configure your source.")
+    console.print("\n[bold]How would you like to set up your configuration?[/bold]\n")
+
+    # Step 1: Main choice
+    choice = questionary.select(
+        "Choose an option:",
+        choices=[
+            questionary.Choice("✨ Create a new config from scratch", value="scratch"),
+            questionary.Choice("📦 Use a zip file with a pre-made config", value="zip"),
+            questionary.Choice("📁 Use an existing git repository", value="git"),
+            questionary.Choice("⚙️  Advanced: Custom sources.json", value="advanced"),
+            questionary.Choice("⬅️  Cancel", value="cancel"),
+        ],
+    ).ask()
+
+    if choice is None or choice == "cancel":
+        print_warning("Initialization cancelled.")
+        return
+
+    # Step 2: Route to appropriate wizard
+    sources_config = None
+
+    if choice == "scratch":
+        sources_config = _wizard_from_scratch()
+    elif choice == "zip":
+        sources_config = _wizard_from_zip()
+    elif choice == "git":
+        sources_config = _wizard_from_git()
+    elif choice == "advanced":
+        sources_config = _wizard_advanced()
+
+    if sources_config is None:
+        print_warning("Setup cancelled.")
+        return
+
+    # Step 3: Check if sources.json already exists
+    sources_file = claude_dir / "sources.json"
+    if sources_file.exists():
+        print_warning(f"{sources_file} already exists")
+        if not questionary.confirm("Overwrite existing sources.json?", default=False).ask():
+            print_warning("Cancelled.")
+            return
+
+    # Step 4: Write sources.json (unless advanced already wrote it)
+    if sources_config:  # Empty dict means advanced already wrote it
+        from claude_setup.init import create_default_sources
+
+        sources_file = create_default_sources(claude_dir, sources_config)
+        print_success(f"Created sources configuration at {sources_file}")
+
+    # Step 5: Show confirmation summary
+    console.print("\n[bold green]✓ Sources configured![/bold green]\n")
+
+    # Show source type and location
+    if choice == "scratch":
+        console.print("[bold]Source:[/bold] Local config (generated from your ~/.claude)")
+    elif choice == "zip":
+        console.print("[bold]Source:[/bold] Local config (extracted from zip)")
+    elif choice == "git":
+        if sources_config and sources_config.get("sources"):
+            source = sources_config["sources"][0]
+            if source["type"] == "github":
+                console.print(f"[bold]Source:[/bold] GitHub repository [cyan]{source['repo']}[/cyan]")
+            else:
+                console.print(f"[bold]Source:[/bold] Local git repository")
+    elif choice == "advanced":
+        console.print("[bold]Source:[/bold] Custom sources.json")
+
+    # Step 6: Show next steps
+    console.print("\n[bold]Next steps:[/bold]")
+    console.print("  1. Run: [cyan]claude-setup install[/cyan]")
+    console.print("  2. Or: [cyan]claude-setup[/cyan] for interactive menu\n")
+
+
 @app.command()
 def init(
     source_file: Optional[str] = typer.Option(None, "--source", "-s", help="Path to sources.json file"),
@@ -1245,98 +1769,11 @@ def init(
         console.print(f"\n[bold]Source:[/bold] Zip file [cyan]{zip_url}[/cyan]")
 
     else:
-        # Interactive setup
-        print_info("No source specified. Let's set one up interactively!")
+        # Interactive wizard
+        interactive_init_wizard()
+        return
 
-        choice = questionary.select(
-            "How do you want to provide configuration?",
-            choices=[
-                questionary.Choice("📦 GitHub Repository", value="github"),
-                questionary.Choice("📁 Local Directory", value="local"),
-                questionary.Choice("📦 Zip File (URL)", value="zip"),
-                questionary.Choice("📄 Custom sources.json", value="file"),
-                questionary.Choice("⬅️  Cancel", value="cancel"),
-            ],
-        ).ask()
-
-        if choice == "cancel" or choice is None:
-            print_warning("Initialization cancelled.")
-            return
-
-        if choice == "github":
-            repo = questionary.text(
-                "GitHub repository (format: owner/repo):",
-                validate=lambda x: "/" in x,
-            ).ask()
-
-            if repo is None:
-                return
-
-            ref = questionary.text("Branch or tag:", default="main").ask()
-
-            source_entry = {
-                "name": "company-config",
-                "type": "github",
-                "repo": repo,
-                "ref": ref or "main",
-            }
-
-            # Auto-detect GITHUB_TOKEN for private repos
-            import os
-            if "GITHUB_TOKEN" in os.environ:
-                source_entry["token"] = "${GITHUB_TOKEN}"
-                console.print("[dim]Detected GITHUB_TOKEN environment variable[/dim]")
-
-            sources_config["sources"].append(source_entry)
-
-        elif choice == "local":
-            path = questionary.path(
-                "Path to local config directory:",
-                only_directories=True,
-            ).ask()
-
-            if path is None:
-                return
-
-            sources_config["sources"].append({
-                "name": "local-config",
-                "type": "local",
-                "path": path,
-            })
-
-        elif choice == "zip":
-            url = questionary.text(
-                "URL to zip file:",
-                validate=lambda x: x.startswith("http"),
-            ).ask()
-
-            if url is None:
-                return
-
-            sources_config["sources"].append({
-                "name": "company-config",
-                "type": "zip",
-                "url": url,
-            })
-
-        elif choice == "file":
-            path = questionary.path("Path to sources.json file:").ask()
-
-            if path is None:
-                return
-
-            import shutil
-
-            source_path = Path(path)
-            dest_path = claude_dir / "sources.json"
-            shutil.copy(source_path, dest_path)
-            print_success(f"Copied sources configuration")
-            return
-
-        sources_file = create_default_sources(claude_dir, sources_config)
-        print_success(f"Created sources configuration at {sources_file}")
-
-    # Show next steps
+    # Show next steps (only for CLI flag paths)
     console.print("\n[bold green]✓ Sources configured![/bold green]")
     console.print("\n[bold]Next steps:[/bold]")
     console.print("  1. Run: [cyan]claude-setup install[/cyan]")

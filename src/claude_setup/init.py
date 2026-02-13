@@ -2,6 +2,7 @@
 
 import json
 from pathlib import Path
+from typing import Optional, Tuple
 
 from claude_setup.sources import SourceManager
 
@@ -122,3 +123,68 @@ def get_config_dir_fallback() -> Path:
         "to configure a source, or use 'claude-setup init --local examples/config-template' "
         "to use the included template. See ADMIN-GUIDE.md for details."
     )
+
+
+def validate_config_source(path: Path) -> Tuple[bool, str, Optional[Path]]:
+    """Check if a directory is a valid config source.
+
+    Args:
+        path: Path to check
+
+    Returns:
+        Tuple of (is_valid, message, resolved_path_if_different)
+        - is_valid: True if valid config source
+        - message: Description of the result
+        - resolved_path: Path if manifest found one level deep, else None
+    """
+    if not path.exists():
+        return False, f"Path does not exist: {path}", None
+
+    if not path.is_dir():
+        return False, f"Path is not a directory: {path}", None
+
+    # Check for manifest.json at this level
+    manifest_path = path / "manifest.json"
+    if manifest_path.exists():
+        try:
+            with open(manifest_path) as f:
+                data = json.load(f)
+
+            if "categories" not in data:
+                return False, "manifest.json missing 'categories' field", None
+
+            if not isinstance(data["categories"], list) or len(data["categories"]) == 0:
+                return False, "manifest.json 'categories' must be a non-empty list", None
+
+            return True, "Valid config source", None
+
+        except json.JSONDecodeError as e:
+            return False, f"manifest.json is not valid JSON: {e}", None
+        except Exception as e:
+            return False, f"Error reading manifest.json: {e}", None
+
+    # Check one level deep (for zip extractions with wrapper directory)
+    subdirs = [d for d in path.iterdir() if d.is_dir()]
+    if len(subdirs) == 1:
+        subdir = subdirs[0]
+        subdir_manifest = subdir / "manifest.json"
+
+        if subdir_manifest.exists():
+            try:
+                with open(subdir_manifest) as f:
+                    data = json.load(f)
+
+                if "categories" not in data:
+                    return False, "manifest.json missing 'categories' field", None
+
+                if not isinstance(data["categories"], list) or len(data["categories"]) == 0:
+                    return False, "manifest.json 'categories' must be a non-empty list", None
+
+                return True, f"Valid config source (found in subdirectory {subdir.name})", subdir
+
+            except json.JSONDecodeError as e:
+                return False, f"manifest.json is not valid JSON: {e}", None
+            except Exception as e:
+                return False, f"Error reading manifest.json: {e}", None
+
+    return False, "manifest.json not found (checked current directory and one level deep)", None
