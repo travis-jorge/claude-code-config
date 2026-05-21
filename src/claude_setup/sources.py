@@ -125,7 +125,7 @@ class GitHubSource(ConfigSource):
 
         # Build clone URL with optional token
         if token:
-            clone_url = f"https://{token}@github.com/{repo}.git"
+            clone_url = f"https://x-access-token:{token}@github.com/{repo}.git"
         else:
             clone_url = f"https://github.com/{repo}.git"
 
