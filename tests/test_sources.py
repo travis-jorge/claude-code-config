@@ -250,9 +250,9 @@ class TestGitHubSource:
 
             result = source.fetch(cache_dir)
 
-            # Verify token was used in URL
+            # Verify token was used in URL (x-access-token is the correct GitHub format)
             clone_call = mock_run.call_args_list[0]
-            url_with_token = "https://test-token@github.com/owner/repo.git"
+            url_with_token = "https://x-access-token:test-token@github.com/owner/repo.git"
             assert url_with_token in clone_call[0][0]
 
     def test_github_source_pull_existing_repo(self, tmp_path):
