@@ -45,6 +45,13 @@
       "files": []
     },
     {
+      "name": "skills",
+      "description": "Reusable Claude Code skills (slash commands with bundled scripts)",
+      "target_dir": ".claude/skills",
+      "install_type": "discover",
+      "files": []
+    },
+    {
       "name": "commands",
       "description": "Custom commands and workflows",
       "target_dir": ".claude/commands",
