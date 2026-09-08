@@ -131,7 +131,15 @@ class GitHubSource(ConfigSource):
 
         try:
             if dest_path.exists():
-                # Update existing clone
+                # Refresh remote URL in case the token has rotated or the
+                # cached clone predates a URL-format fix (e.g. missing
+                # x-access-token prefix), then update.
+                subprocess.run(
+                    ["git", "-C", str(dest_path), "remote", "set-url", "origin", clone_url],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                )
                 subprocess.run(
                     ["git", "-C", str(dest_path), "fetch", "origin"],
                     check=True,
