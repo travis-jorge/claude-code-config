@@ -402,8 +402,18 @@ def plugins(
 def update(
     check: bool = typer.Option(False, "--check", help="Check for updates only"),
 ):
-    """Check for and install updates."""
+    """Check for and install CONFIG updates (not the tool itself).
+
+    This only updates your installed configuration files under ~/.claude.
+    It does NOT upgrade the claude-setup tool/package. Use 'claude-setup
+    upgrade' to update the tool itself.
+    """
     show_banner(__version__)
+
+    console.print(
+        "[dim]This updates your installed CONFIG only — it does not upgrade "
+        "the claude-setup tool. Use 'claude-setup upgrade' for that.[/dim]\n"
+    )
 
     try:
         registry, _, version_mgr, _, installer = initialize_managers()
@@ -647,7 +657,8 @@ def interactive_menu():
                     questionary.Choice("🔌 Manage Plugins", value="plugins"),
                     questionary.Choice("💾 View Backups", value="backups"),
                     questionary.Choice("⏮️ Rollback to Backup", value="rollback"),
-                    questionary.Choice("🔄 Check for Updates", value="update"),
+                    questionary.Choice("🔄 Check for Config Updates", value="update"),
+                    questionary.Choice("🆙 Upgrade Tool", value="upgrade_tool"),
                     questionary.Choice("🔧 Advanced/Admin Tools", value="admin"),
                     questionary.Choice("🚪 Exit", value="exit"),
                 ],
@@ -673,6 +684,8 @@ def interactive_menu():
                 interactive_rollback()
             elif choice == "update":
                 interactive_update()
+            elif choice == "upgrade_tool":
+                interactive_upgrade()
             elif choice == "admin":
                 interactive_admin_menu()
                 # Clear and show main banner again after returning from admin menu
@@ -902,7 +915,16 @@ def interactive_rollback():
 
 
 def interactive_update():
-    """Interactive update check and install."""
+    """Interactive CONFIG update check and install (not the tool).
+
+    This only updates your installed configuration files under ~/.claude.
+    It does NOT upgrade the claude-setup tool/package. Use the "Upgrade
+    Tool" menu option (or 'claude-setup upgrade') to update the tool.
+    """
+    console.print(
+        "[dim]This updates your installed CONFIG only — it does not upgrade "
+        "the claude-setup tool. Use 'claude-setup upgrade' for that.[/dim]\n"
+    )
     try:
         registry, _, version_mgr, _, installer = initialize_managers()
     except Exception as e:
@@ -938,6 +960,28 @@ def interactive_update():
         print_success("Update complete!")
     except InstallationError as e:
         print_error(f"Update failed: {e}")
+
+
+def interactive_upgrade():
+    """Interactive tool upgrade (git pull + reinstall of claude-setup itself)."""
+    try:
+        upgrade(check=False)
+    except typer.Exit:
+        # upgrade() uses typer.Exit for every exit path, including the
+        # successful "already up to date" and "upgrade complete" cases, not
+        # just errors. Swallow it here so the menu loop's generic
+        # `except Exception` handler doesn't misreport success as a failure.
+        return
+
+    # Reaching here (no typer.Exit raised) means the reinstall actually
+    # happened. This process still has the old code loaded in memory, so
+    # force the whole tool to exit instead of returning to a menu that
+    # would keep running stale code for the rest of the session.
+    console.print(
+        "\n[bold yellow]Restart required:[/bold yellow] claude-setup was "
+        "upgraded. Run [cyan]claude-setup[/cyan] again to use the new version.\n"
+    )
+    raise SystemExit(0)
 
 
 def interactive_create_config(show_next_steps: bool = True) -> Optional[Path]:
