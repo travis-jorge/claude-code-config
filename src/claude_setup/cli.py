@@ -58,6 +58,16 @@ def get_tool_dir() -> Path:
     return Path(__file__).parent.parent.parent
 
 
+def _is_pipx_install() -> bool:
+    """Detect whether this process is running inside a pipx-managed venv."""
+    import sys
+
+    # Deliberately not resolved: pipx's bin/python is often a symlink to the
+    # base interpreter, and resolving it walks straight out of the venv.
+    venv_root = Path(sys.executable).parent.parent
+    return (venv_root / "pipx_metadata.json").exists()
+
+
 def get_config_dir() -> Path:
     """Get path to config directory from sources or fallback."""
     from claude_setup.init import get_config_dir_fallback
@@ -475,8 +485,11 @@ def upgrade(
     if not git_dir.exists():
         print_error("This installation is not from git.")
         console.print("\n[yellow]To upgrade:[/yellow]")
-        console.print("  If installed via pip: [cyan]pip install --upgrade claude-setup[/cyan]")
-        console.print("  If from source: Clone the repo and reinstall")
+        if _is_pipx_install():
+            console.print("  [cyan]pipx upgrade claude-setup[/cyan]")
+        else:
+            console.print("  If installed via pip: [cyan]pip install --upgrade claude-setup[/cyan]")
+            console.print("  If from source: Clone the repo and reinstall")
         raise typer.Exit(1)
 
     print_info("Checking for updates...")
@@ -569,17 +582,50 @@ def upgrade(
 
     # Reinstall package
     print_info("Reinstalling package...")
-    try:
-        subprocess.run(
-            [sys.executable, "-m", "pip", "install", "-e", str(tool_dir), "--quiet"],
-            check=True,
+
+    if _is_pipx_install():
+        if shutil.which("pipx") is None:
+            print_error(
+                "This is a pipx installation, but 'pipx' isn't on your PATH. "
+                "Run 'pipx reinstall claude-setup' manually to finish upgrading."
+            )
+            raise typer.Exit(1)
+        try:
+            subprocess.run(
+                ["pipx", "reinstall", "claude-setup"],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            print_success("Package reinstalled via pipx")
+        except subprocess.CalledProcessError as e:
+            print_error(f"Failed to reinstall via pipx: {e.stderr}")
+            raise typer.Exit(1)
+    else:
+        pip_check = subprocess.run(
+            [sys.executable, "-m", "pip", "--version"],
             capture_output=True,
             text=True,
         )
-        print_success("Package reinstalled")
-    except subprocess.CalledProcessError as e:
-        print_error(f"Failed to reinstall: {e.stderr}")
-        raise typer.Exit(1)
+        if pip_check.returncode != 0:
+            print_error(
+                "pip is not available for this Python interpreter, and no "
+                "pipx installation was detected. Install pip, or reinstall "
+                "claude-setup with pipx, to enable upgrades."
+            )
+            raise typer.Exit(1)
+
+        try:
+            subprocess.run(
+                [sys.executable, "-m", "pip", "install", "-e", str(tool_dir), "--quiet"],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            print_success("Package reinstalled")
+        except subprocess.CalledProcessError as e:
+            print_error(f"Failed to reinstall: {e.stderr}")
+            raise typer.Exit(1)
 
     # Show new version
     try:
