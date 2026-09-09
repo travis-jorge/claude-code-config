@@ -99,8 +99,9 @@ class VersionManager:
             if not file_path.is_file():
                 continue
 
-            # Skip hidden files and system files
-            if file_path.name.startswith("."):
+            # Skip hidden files/dirs (e.g. .git, .github) and their contents
+            relative_parts = file_path.relative_to(self.config_dir).parts
+            if any(part.startswith(".") for part in relative_parts):
                 continue
 
             # Add file path (for structure changes) and content
