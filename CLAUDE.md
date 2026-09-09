@@ -8,7 +8,7 @@ Claude Setup is a pluggable CLI tool for managing Claude Code team configuration
 
 **Key Architecture Principle**: Clean separation between tool and configuration. This repo contains the tool only; configuration is fetched from sources defined in `~/.claude/sources.json`.
 
-**Current Version**: 3.4.1
+**Current Version**: 3.4.2
 - Added beginner-friendly init wizard with 5 intuitive options
 - Consistent git clone behavior for all repository types
 - Admin functions separated into dedicated submenu
