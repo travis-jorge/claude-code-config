@@ -43,6 +43,9 @@ config-template/
    # - Add skills in skills/
    # - Add commands in commands/
    # - List required plugins in plugins/required.json
+   #   (optionally with "marketplace": {"name": "team-tools", "source": "example-org/team-config"})
+   # - List files you stop shipping under "retired" in manifest.json
+   #   (they are moved to ~/.claude/archived/<timestamp>/, never deleted)
    ```
 
 3. **Publish your configuration:**

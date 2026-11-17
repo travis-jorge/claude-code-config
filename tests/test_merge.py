@@ -134,3 +134,56 @@ def test_plugins_merge_overwrite():
     assert result["enabledPlugins"]["shared-plugin"] is True
     # User plugin preserved
     assert result["enabledPlugins"]["user-plugin"] is True
+
+
+class TestExtraKnownMarketplacesMerge:
+    """extraKnownMarketplaces is union-merged keyed by marketplace name."""
+
+    TEAM_MKT = {"source": {"source": "github", "repo": "example-org/team-config"}}
+
+    def test_team_marketplace_added_to_user_settings(self):
+        source = {"extraKnownMarketplaces": {"team": self.TEAM_MKT}}
+        target = {"model": "sonnet"}
+
+        result = merge_settings(source, target)
+
+        assert result["extraKnownMarketplaces"] == {"team": self.TEAM_MKT}
+
+    def test_user_marketplaces_preserved(self):
+        user_mkt = {"source": {"source": "git", "url": "https://example.com/personal.git"}}
+        source = {"extraKnownMarketplaces": {"team": self.TEAM_MKT}}
+        target = {"extraKnownMarketplaces": {"personal": user_mkt}}
+
+        result = merge_settings(source, target)
+
+        assert result["extraKnownMarketplaces"] == {"team": self.TEAM_MKT, "personal": user_mkt}
+
+    def test_team_entry_wins_for_same_name(self):
+        stale = {"source": {"source": "github", "repo": "example-org/old-config"}}
+        source = {"extraKnownMarketplaces": {"team": self.TEAM_MKT}}
+        target = {"extraKnownMarketplaces": {"team": stale}}
+
+        result = merge_settings(source, target)
+
+        assert result["extraKnownMarketplaces"]["team"] == self.TEAM_MKT
+
+    def test_user_marketplaces_kept_when_team_has_none(self):
+        user_mkt = {"source": {"source": "directory", "path": "/tmp/mkt"}}
+        result = merge_settings({"model": "opus"}, {"extraKnownMarketplaces": {"personal": user_mkt}})
+
+        assert result["extraKnownMarketplaces"] == {"personal": user_mkt}
+
+    def test_non_dict_user_value_is_replaced(self):
+        source = {"extraKnownMarketplaces": {"team": self.TEAM_MKT}}
+        result = merge_settings(source, {"extraKnownMarketplaces": ["not", "a", "dict"]})
+
+        assert result["extraKnownMarketplaces"] == {"team": self.TEAM_MKT}
+
+    def test_does_not_mutate_inputs(self):
+        source = {"extraKnownMarketplaces": {"team": self.TEAM_MKT}}
+        target = {"extraKnownMarketplaces": {"personal": {"source": {"source": "github", "repo": "me/mine"}}}}
+
+        merge_settings(source, target)
+
+        assert list(target["extraKnownMarketplaces"]) == ["personal"]
+        assert list(source["extraKnownMarketplaces"]) == ["team"]

@@ -262,3 +262,20 @@ def populated_claude_dir(temp_dir):
     (plans_dir / "some-plan.md").write_text("# Some plan")
 
     return claude_dir
+
+
+@pytest.fixture(autouse=True)
+def _no_real_claude_cli(monkeypatch):
+    """Safety net: no test may run the real `claude` CLI or probe the real git config.
+
+    Tests that exercise plugin commands patch claude_setup.plugins._execute
+    themselves; anything that slips through fails loudly instead of touching
+    the user's ~/.claude.
+    """
+    import claude_setup.plugins as plugins
+
+    def _blocked(argv, *args, **kwargs):
+        raise AssertionError(f"test tried to run a real command: {argv}")
+
+    monkeypatch.setattr(plugins, "_execute", _blocked)
+    monkeypatch.setattr(plugins, "_git_ssh_configured", lambda: False)

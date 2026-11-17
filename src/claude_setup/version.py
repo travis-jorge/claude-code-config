@@ -32,8 +32,9 @@ class VersionManager:
 
         try:
             with open(self.stamp_path) as f:
-                return json.load(f)
-        except (json.JSONDecodeError, KeyError):
+                stamp = json.load(f)
+            return stamp if isinstance(stamp, dict) else {}
+        except (OSError, ValueError, KeyError, RecursionError):
             return {}
 
     def get_available(self) -> dict:

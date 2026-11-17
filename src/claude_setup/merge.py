@@ -12,6 +12,8 @@ def merge_settings(source: dict[str, Any], target: dict[str, Any]) -> dict[str, 
     - Union permissions.allow (team + user, sorted)
     - Preserve user's permissions.deny and permissions.ask
     - Union enabledPlugins (team plugins added, user extras preserved)
+    - Union extraKnownMarketplaces (team entry wins for the same name,
+      user's other marketplaces preserved)
     - Overwrite model, statusLine, alwaysThinkingEnabled with team standard
     - Preserve feedbackSurveyState and any unknown keys
 
@@ -49,6 +51,12 @@ def merge_settings(source: dict[str, Any], target: dict[str, Any]) -> dict[str, 
     if "enabledPlugins" in source or "enabledPlugins" in target:
         result["enabledPlugins"] = _merge_plugins(
             source.get("enabledPlugins", {}), target.get("enabledPlugins", {})
+        )
+
+    # Union extraKnownMarketplaces (keyed by marketplace name)
+    if "extraKnownMarketplaces" in source:
+        result["extraKnownMarketplaces"] = _merge_marketplaces(
+            source.get("extraKnownMarketplaces"), target.get("extraKnownMarketplaces")
         )
 
     # Preserve feedbackSurveyState (user-specific)
@@ -93,6 +101,24 @@ def _merge_plugins(source: dict[str, bool], target: dict[str, bool]) -> dict[str
 
     # Add team plugins (overwrites if user disabled)
     result.update(source)
+
+    return result
+
+
+def _merge_marketplaces(source: Any, target: Any) -> dict[str, Any]:
+    """Merge extraKnownMarketplaces - union keyed by marketplace name.
+
+    The team definition wins when both declare the same marketplace name;
+    any other marketplaces the user added are kept. Non-dict values (which
+    Claude Code would not accept anyway) are treated as empty.
+    """
+    result: dict[str, Any] = {}
+
+    if isinstance(target, dict):
+        result.update(target)
+
+    if isinstance(source, dict):
+        result.update(source)
 
     return result
 

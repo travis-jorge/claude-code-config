@@ -176,6 +176,10 @@ Missing Plugins:
 ? Install missing plugins now? (Y/n)
 ```
 
+`claude-setup update` now installs missing required plugins and updates
+installed ones automatically (refreshing team marketplaces first); use
+`--skip-plugins` to opt out. You can still check or install manually:
+
 **After update, check plugins:**
 ```bash
 claude-setup plugins --install

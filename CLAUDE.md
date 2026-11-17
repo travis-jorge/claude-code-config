@@ -103,10 +103,16 @@ Sources are cached in `~/.claude/sources/` to avoid repeated fetches.
 - File discovery for recursive directories (commands category)
 
 **`merge.py`** - Smart settings.json merging:
-- **Union**: `permissions.allow` and `enabledPlugins` (team + user)
+- **Union**: `permissions.allow`, `enabledPlugins` and `extraKnownMarketplaces` (team + user; team wins per key)
 - **Preserve**: `permissions.deny`, `permissions.ask`, `feedbackSurveyState`, unknown keys
 - **Overwrite**: `model`, `statusLine`, `alwaysThinkingEnabled` (team standard)
 - Template resolution: `{{HOME}}` → actual home directory path
+
+**`archive.py`** - Retired paths are moved (never deleted):
+- `~/.claude/archived/<YYYY-MM-DD-HHMMSS>/<original path>`, unique names on collision
+- Fixed allowlist `skills/`, `agents/`, `commands/`; no symlinked components above the leaf; NFC+casefold comparisons
+- `archive-manifest.json` journal per run (pending/done, atomic, never via symlink); the install's backup records the run (`"archive"` key)
+- Rollback validates the run dir and every item, and moves items back only where the original path is free
 
 **`backup.py`** - Backup/rollback system:
 - Timestamped backups: `~/.claude/backups/claude-setup-YYYY-MM-DD-HHMMSS/`
@@ -128,9 +134,10 @@ Sources are cached in `~/.claude/sources/` to avoid repeated fetches.
 - Compares installed vs available to detect updates
 
 **`plugins.py`** - Plugin management:
-- Reads `~/.claude/plugins/installed_plugins.json`
-- Compares against `config/plugins/required.json`
-- Can invoke `claude plugin install` via subprocess
+- Reads `~/.claude/plugins/installed_plugins.json` and `known_marketplaces.json`
+- Compares against `config/plugins/required.json` (entries may declare a `marketplace: {name, source}`)
+- Invokes `claude plugin marketplace add|update`, `claude plugin install` and `claude plugin update` via subprocess
+- `sync()` (used by `claude-setup update` and `plugins --update`) never raises on CLI failures
 
 **`display.py`** - Rich terminal UI:
 - Banners, tables, progress bars, panels
@@ -197,6 +204,7 @@ See `examples/config-template/` for a complete template.
 ```json
 {
   "version": "1.0.0",
+  "retired": ["skills/old-skill"],  // optional: paths under ~/.claude to move to ~/.claude/archived/<ts>/
   "categories": [
     {
       "name": "core",

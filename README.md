@@ -122,8 +122,9 @@ claude-setup install --all
 # Check status
 claude-setup status
 
-# Update to latest
+# Update to latest (files, then team marketplaces and required plugins)
 claude-setup update
+claude-setup update --skip-plugins   # files only
 
 # Manage plugins
 claude-setup plugins
@@ -181,6 +182,95 @@ your-org/claude-config/
 ```
 
 See `examples/config-template/` for a complete template.
+
+### Plugins, Marketplaces and Retired Files
+
+A config repo can ship skills and agents as Claude Code plugins from a plugin
+marketplace instead of as copied files.
+
+- **`plugins/required.json`** entries may declare the marketplace a plugin comes
+  from. If Claude Code doesn't know that marketplace yet, claude-setup runs
+  `claude plugin marketplace add <source>` before `claude plugin install <plugin>`.
+  `source` is a GitHub `owner/repo`, a git or https URL, or a local path.
+  Entries without `marketplace` still work as before.
+
+```json
+[
+  {
+    "name": "team-skills@team-tools",
+    "description": "Team skills and agents",
+    "marketplace": {"name": "team-tools", "source": "example-org/team-config"}
+  },
+  {
+    "name": "ralph-loop@claude-plugins-official",
+    "description": "Entry without a marketplace: the marketplace must already be known"
+  }
+]
+```
+
+- **`extraKnownMarketplaces`** in the team `settings.json` is merged into the
+  user's settings by marketplace name: the team entry wins for the same name and
+  the user's other marketplaces are kept.
+- **`claude-setup update`** installs updated files, then refreshes each team
+  marketplace (`claude plugin marketplace update <name>`), installs missing
+  required plugins and updates installed ones (`claude plugin update <plugin>`).
+  This also runs when the config files are already up to date. Plugin failures
+  are reported but don't fail the update. Use `--skip-plugins` to skip them, or
+  `claude-setup plugins --update` to run only the plugin steps.
+- **`"retired"`** in `manifest.json` lists paths (relative to `~/.claude`) the
+  team no longer ships, such as skills that moved into a plugin:
+
+  ```json
+  {
+    "version": "1.0.0",
+    "retired": ["skills/old-skill", "agents/old-agent.md"],
+    "categories": [...]
+  }
+  ```
+
+  `install` and `update` **move** these into an archive folder; nothing is
+  deleted (see below). Only paths inside `~/.claude/skills/`,
+  `~/.claude/agents/` or `~/.claude/commands/` can be retired, and only when
+  none of the folders above them is a symlink. Everything else is refused and
+  never touched.
+
+#### The archive folder: `~/.claude/archived/`
+
+When a retired path is still on your machine, claude-setup moves it to:
+
+```
+~/.claude/archived/<timestamp>/<original path>
+```
+
+For example, `~/.claude/skills/old-skill/` becomes
+`~/.claude/archived/2026-01-31-142501/skills/old-skill/`.
+
+- **What gets moved:** only the paths listed under `"retired"` in the team
+  manifest that still exist in `~/.claude`. Files, directories and symlinks
+  are moved as they are; a symlink stays a symlink and its target is untouched.
+- **Why move instead of delete:** if the old copy stayed in `skills/` or
+  `agents/`, Claude Code would load it next to the plugin version and you'd
+  have duplicates. Moving it avoids that without deleting anything you might
+  have changed locally. Claude Code doesn't load anything from `archived/`.
+- **Before anything moves:** `claude-setup update` lists each path and its
+  destination and asks for confirmation (`--yes` skips the question).
+  Answering no cancels the whole update ("Update cancelled; nothing
+  changed"): no files are installed, no backup is made and plugins aren't
+  touched. Ctrl-C does the same with exit code 130.
+  `claude-setup install --dry-run` and `claude-setup update --check` show the
+  same list without changing anything.
+- **Where it went:** the update summary prints the archive folder, and
+  `claude-setup status` lists retired paths still present and earlier archive
+  folders.
+- **How to get something back:**
+  - `claude-setup rollback` moves the items archived by that update back to
+    their original paths. If something already exists at the original path it
+    is left alone and the conflict is reported; nothing is overwritten.
+  - Or move it back by hand, e.g.
+    `mv ~/.claude/archived/2026-01-31-142501/skills/old-skill ~/.claude/skills/`.
+- **Cleaning up:** once you're happy with the plugin version, it's safe to
+  delete `~/.claude/archived/` (or any folder inside it). claude-setup never
+  deletes it for you.
 
 ## 📚 Documentation
 
