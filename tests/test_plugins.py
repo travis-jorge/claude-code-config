@@ -135,7 +135,7 @@ class TestPluginManager:
         required = [{"name": "test-plugin", "description": "Test"}]
         manager = PluginManager(claude_dir, required)
 
-        with patch("subprocess.run") as mock_run:
+        with patch("claude_setup.plugins._execute") as mock_run:
             mock_run.return_value = MagicMock(
                 returncode=0,
                 stdout="Plugin installed successfully",
@@ -159,7 +159,7 @@ class TestPluginManager:
         required = [{"name": "test-plugin", "description": "Test"}]
         manager = PluginManager(claude_dir, required)
 
-        with patch("subprocess.run") as mock_run:
+        with patch("claude_setup.plugins._execute") as mock_run:
             mock_run.return_value = MagicMock(
                 returncode=1,
                 stdout="",
@@ -179,7 +179,7 @@ class TestPluginManager:
         required = [{"name": "test-plugin", "description": "Test"}]
         manager = PluginManager(claude_dir, required)
 
-        with patch("subprocess.run") as mock_run:
+        with patch("claude_setup.plugins._execute") as mock_run:
             mock_run.side_effect = FileNotFoundError("claude command not found")
 
             success, message = manager.install_plugin("test-plugin")
@@ -209,7 +209,7 @@ class TestPluginManager:
         ]
         manager = PluginManager(claude_dir, required)
 
-        with patch("subprocess.run") as mock_run:
+        with patch("claude_setup.plugins._execute") as mock_run:
             mock_run.return_value = MagicMock(
                 returncode=0,
                 stdout="Plugin installed successfully",

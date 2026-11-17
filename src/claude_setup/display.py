@@ -1,15 +1,21 @@
 """Rich UI display helpers."""
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 from rich.console import Console
+from rich.markup import escape
 from rich.panel import Panel
 from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn
 from rich.table import Table
 from rich.prompt import Confirm
 
 console = Console()
+
+
+def _e(value: Any) -> str:
+    """Escape any value for safe inclusion in Rich markup (paths may contain '[')."""
+    return escape(str(value))
 
 
 def show_banner(version: str) -> None:
@@ -46,15 +52,17 @@ def show_install_plan(plan: dict[str, list[tuple[Path, str]]]) -> None:
         "Updated": "yellow",
         "Unchanged": "dim",
         "Merge": "magenta",
+        "Archive": "red",
+        "Refused": "bold red",
     }
 
     for status, files in plan.items():
         for file_path, action in files:
             color = status_colors.get(status, "white")
             table.add_row(
-                str(file_path),
-                f"[{color}]{status}[/{color}]",
-                action,
+                _e(file_path),
+                f"[{color}]{_e(status)}[/{color}]",
+                _e(action),
             )
 
     console.print(table)
@@ -85,6 +93,7 @@ def show_summary(result: dict[str, Any]) -> None:
   • Files updated: [yellow]{stats.get('updated', 0)}[/yellow]
   • Files unchanged: [dim]{stats.get('unchanged', 0)}[/dim]
   • Settings merged: [magenta]{'Yes' if stats.get('merged', False) else 'No'}[/magenta]
+  • Retired paths archived: [red]{stats.get('archived', 0)}[/red]
 
 [bold]Categories installed:[/bold]
   {', '.join(categories)}
@@ -99,6 +108,58 @@ def show_summary(result: dict[str, Any]) -> None:
 """
 
     console.print(Panel(summary_text, border_style="green", padding=(1, 2)))
+
+    show_retired_result(result.get("retired") or {})
+
+
+def show_retired_result(retired: dict[str, Any]) -> None:
+    """Report where retired paths were archived, and any problems."""
+    archive_dir = retired.get("archive_dir")
+    if archive_dir:
+        console.print(f"\n[bold]Retired paths moved to[/bold] [cyan]{_e(archive_dir)}[/cyan]:")
+        for original, archived in retired.get("archived", []):
+            console.print(f"  • {_e(original)} → {_e(archived)}")
+        console.print(
+            "  [dim]Nothing was deleted. Run 'claude-setup rollback' to move them back, "
+            "or delete this folder once you're happy.[/dim]"
+        )
+    for path, message in retired.get("failed", []):
+        console.print(
+            f"[bold red]✗[/bold red] Could not archive retired path {_e(path)}: {_e(message)} (left in place)"
+        )
+    for entry, reason in retired.get("refused", []):
+        console.print(f"[bold yellow]⚠[/bold yellow] Ignored retired entry {_e(repr(entry))}: {_e(reason)}")
+    if retired.get("skipped"):
+        console.print("[yellow]Retired paths were left in place (archiving declined).[/yellow]")
+
+
+def show_archive_plan(items: list[tuple[Any, str]]) -> None:
+    """List retired paths that will be moved, with their destinations."""
+    console.print("\n[bold]Retired paths to archive (moved, not deleted):[/bold]")
+    for path, action in items:
+        console.print(f"  • {_e(path)} → {_e(str(action).replace('Move to ', '', 1))}")
+
+
+def show_restore_result(
+    restore: Optional[dict[str, Any]],
+    skipped_files: Optional[list[tuple[str, str]]] = None,
+) -> None:
+    """Report backup files skipped and archived items moved back by a rollback."""
+    for path, reason in skipped_files or []:
+        console.print(f"[bold yellow]⚠[/bold yellow] Did not restore {_e(path)}: {_e(reason)}")
+    if not restore:
+        return
+    for path in restore.get("restored", []):
+        console.print(f"[green]✓[/green] Moved back from archive: {_e(path)}")
+    for original, archived in restore.get("conflicts", []):
+        console.print(
+            f"[bold yellow]⚠[/bold yellow] Not restored, {_e(original)} already exists. "
+            f"The archived copy is still at {_e(archived)}"
+        )
+    for archived in restore.get("missing", []):
+        console.print(f"[bold yellow]⚠[/bold yellow] Archived item no longer exists: {_e(archived)}")
+    for path, message in restore.get("failed", []):
+        console.print(f"[bold red]✗[/bold red] Could not move back {_e(path)}: {_e(message)}")
 
 
 def show_backup_list(backups: list[dict[str, Any]]) -> None:
@@ -125,23 +186,37 @@ def show_backup_list(backups: list[dict[str, Any]]) -> None:
             created_str = str(created).split(".")[0].replace("T", " ")
 
         table.add_row(
-            backup["id"],
-            created_str,
-            ", ".join(backup.get("categories", [])),
+            _e(backup["id"]),
+            _e(created_str),
+            _e(", ".join(str(c) for c in backup.get("categories", []))),
             str(backup.get("file_count", 0)),
         )
 
     console.print(table)
 
 
-def show_status(installed: dict[str, Any], available: dict[str, Any]) -> None:
-    """Show version comparison status."""
-    installed_version = installed.get("tool_version", "Not installed")
-    available_version = available.get("tool_version", "Unknown")
-    installed_hash = installed.get("config_hash", "")
-    available_hash = available.get("config_hash", "")
+def show_status(
+    installed: dict[str, Any],
+    available: dict[str, Any],
+    retired_present: Optional[list[Any]] = None,
+    archives: Optional[list[dict[str, Any]]] = None,
+) -> None:
+    """Show version comparison status.
+
+    Args:
+        installed: Installed version stamp
+        available: Available version info
+        retired_present: Retired paths from the manifest that still exist
+        archives: Previous archive runs ({"path", "items"}), newest first
+    """
+    installed_version = _e(installed.get("tool_version", "Not installed"))
+    available_version = _e(available.get("tool_version", "Unknown"))
+    installed_hash = _e(installed.get("config_hash") or "")
+    available_hash = _e(available.get("config_hash") or "")
 
     has_updates = installed_hash != available_hash if installed_hash else True
+
+    categories = installed.get("categories") if isinstance(installed.get("categories"), list) else []
 
     status_text = f"""[bold]Installation Status[/bold]
 
@@ -157,10 +232,26 @@ def show_status(installed: dict[str, Any], available: dict[str, Any]) -> None:
   {"[yellow]⚠ Updates available[/yellow]" if has_updates else "[green]✓ Up to date[/green]"}
 
 [bold]Installed Categories:[/bold]
-  {', '.join(installed.get('categories', [])) if installed.get('categories') else '[dim]None[/dim]'}
+  {_e(', '.join(str(c) for c in categories)) if categories else '[dim]None[/dim]'}
 """
 
-    border_color = "yellow" if has_updates else "green"
+    if retired_present:
+        retired_lines = "\n".join(f"  [red]•[/red] {_e(path)}" for path in retired_present)
+        status_text += (
+            "\n[bold]Retired Paths Still Present:[/bold]\n"
+            f"{retired_lines}\n"
+            "  [dim]Run 'claude-setup update' to move them into ~/.claude/archived/[/dim]\n"
+        )
+
+    if archives:
+        archive_lines = "\n".join(f"  • {_e(a['path'])} ({a['items']} item(s))" for a in archives)
+        status_text += (
+            "\n[bold]Archived Retired Paths:[/bold]\n"
+            f"{archive_lines}\n"
+            "  [dim]Safe to delete once you no longer need the old copies[/dim]\n"
+        )
+
+    border_color = "yellow" if has_updates or retired_present else "green"
     console.print(Panel(status_text, border_style=border_color, padding=(1, 2)))
 
 

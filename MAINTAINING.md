@@ -171,9 +171,45 @@ vim config/plugins/required.json
   {
     "name": "new-plugin@example",
     "description": "New required plugin"
+  },
+  {
+    "name": "team-skills@team-tools",
+    "description": "Plugin from the team marketplace",
+    "marketplace": {"name": "team-tools", "source": "example-org/team-config"}
   }
 ]
 ```
+
+The optional `marketplace` object lets `claude-setup` add the marketplace
+(`claude plugin marketplace add <source>`) before installing, if it isn't known
+yet. `claude-setup update` also refreshes these marketplaces and runs
+`claude plugin update` on installed required plugins; failures are reported
+without failing the update (`--skip-plugins` turns this off).
+
+#### Example: Retire a File Moved into a Plugin
+
+When you stop shipping a file (for example a skill now delivered by a plugin),
+delete it from the config repo **and** list it under `retired` in
+`manifest.json` so the old copy is moved out of engineers' `~/.claude`:
+
+```json
+{
+  "version": "1.0.0",
+  "retired": ["skills/old-skill", "agents/old-agent.md"],
+  "categories": [...]
+}
+```
+
+Paths are relative to `~/.claude` and must be inside `skills/`, `agents/` or
+`commands/` (a fixed, case-sensitive list), with no symlinked folder above
+them. Declining the confirmation in `update` cancels the whole update. On `update` (after confirmation) and `install` they are **moved** to
+`~/.claude/archived/<timestamp>/<original path>`; nothing is deleted.
+`claude-setup rollback` moves them back where the original path is free.
+Anything outside the allowlist (absolute paths, `..`, `rules/`, `projects/`,
+`plugins/`, `settings*.json`, `backups/`, `sources/`, `archived/`, paths the
+manifest still installs, ...) is refused. Check with `claude-setup install --all --dry-run`
+(status `Archive`) and `claude-setup status`. Keep entries in `retired` for a
+while so machines that update late are cleaned up too.
 
 ### Step 3: Update manifest.json (if needed)
 
@@ -187,6 +223,7 @@ Most updates don't require manifest changes because:
 - ✅ Adding files to existing categories: **Auto-discovered**
 - ✅ Updating existing files: **Auto-detected**
 - ❌ Creating new category: **Must update manifest**
+- ❌ Moving old files off engineers' machines: **Add them to `retired`** (see above)
 
 ### Step 4: Test Locally
 

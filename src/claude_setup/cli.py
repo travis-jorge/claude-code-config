@@ -12,9 +12,10 @@ from typing import Optional
 import questionary
 import typer
 from rich.console import Console
+from rich.markup import escape
 
 from claude_setup import __version__
-from claude_setup.backup import BackupManager
+from claude_setup.backup import BackupError, BackupManager
 from claude_setup.categories import CategoryRegistry
 from claude_setup.create_config import (
     ConfigPlan,
@@ -30,11 +31,13 @@ from claude_setup.display import (
     print_info,
     print_success,
     print_warning,
+    show_archive_plan,
     show_backup_list,
     show_banner,
     show_categories,
     show_config_preview,
     show_install_plan,
+    show_restore_result,
     show_scan_results,
     show_status,
     show_summary,
@@ -87,16 +90,69 @@ def initialize_managers():
     backup_mgr = BackupManager(claude_dir)
     version_mgr = VersionManager(claude_dir, config_dir)
 
-    # Load required plugins
+    # Load required plugins (optional file)
     plugins_file = config_dir / "plugins" / "required.json"
-    with open(plugins_file) as f:
-        required_plugins = json.load(f)
+    required_plugins = []
+    if plugins_file.exists():
+        with open(plugins_file) as f:
+            required_plugins = json.load(f)
+        if not isinstance(required_plugins, list):
+            raise ValueError(f"{plugins_file} must contain a JSON list of plugin entries")
 
-    plugin_mgr = PluginManager(claude_dir, required_plugins)
+    plugin_mgr = PluginManager(claude_dir, required_plugins, config_dir=config_dir)
 
     installer = Installer(config_dir, claude_dir, registry, backup_mgr, version_mgr)
 
     return registry, backup_mgr, version_mgr, plugin_mgr, installer
+
+
+def _print_results(results: dict[str, tuple[bool, str]], ok_verb: str, fail_verb: str) -> int:
+    """Print (success, message) results; return the number of failures."""
+    failures = 0
+    for name, (success, message) in results.items():
+        if success:
+            print_success(f"{ok_verb} {name}")
+        else:
+            failures += 1
+            print_error(f"{fail_verb} {name}: {message}")
+    return failures
+
+
+def sync_plugins(plugin_mgr: PluginManager) -> int:
+    """Refresh team marketplaces, install missing and update installed required plugins.
+
+    Failures are reported, never raised, so a plugin problem cannot fail a
+    configuration update.
+
+    Returns:
+        Number of failed steps
+    """
+    if not plugin_mgr.required_plugins:
+        print_info("No required plugins declared; skipping plugin sync")
+        return 0
+
+    for warning in plugin_mgr.get_warnings():
+        print_warning(warning)
+
+    console.print("\n[bold]Syncing plugins...[/bold]")
+    try:
+        results = plugin_mgr.sync()
+    except Exception as e:  # noqa: BLE001 - plugin sync must never be fatal
+        print_error(f"Plugin sync failed: {e}")
+        return 1
+
+    failures = 0
+    failures += _print_results(results["marketplaces"], "Refreshed marketplace", "Failed to refresh marketplace")
+    failures += _print_results(results["installed"], "Installed plugin", "Failed to install plugin")
+    failures += _print_results(results["updated"], "Updated plugin", "Failed to update plugin")
+
+    if plugin_mgr.cli_missing:
+        print_warning("The claude CLI was not found in PATH; plugin steps were skipped")
+    if failures:
+        print_warning(f"{failures} plugin step(s) failed. Run 'claude-setup plugins' for details.")
+    else:
+        print_success("Plugins are up to date (restart Claude Code to apply plugin updates)")
+    return failures
 
 
 def _parse_github_url(url: str) -> Optional[tuple[str, str]]:
@@ -215,21 +271,25 @@ def install(
             raise typer.Exit(0)
 
     # Compute installation plan
-    plan = installer.compute_plan(selected_categories)
+    try:
+        plan = installer.compute_plan(selected_categories)
+    except InstallationError as e:
+        print_error(f"Installation failed: {escape(str(e))}")
+        raise typer.Exit(1)
 
     # Show plan
     print_info("Installation plan:")
     show_install_plan(plan)
 
     # Check if any changes needed
-    total_changes = len(plan["New"]) + len(plan["Updated"]) + len(plan["Merge"])
+    total_changes = len(plan["New"]) + len(plan["Updated"]) + len(plan["Merge"]) + len(plan.get("Archive", []))
     if total_changes == 0:
         print_success("All files are up to date. No changes needed.")
         raise typer.Exit(0)
 
     # Confirm unless force or dry-run
     if not dry_run and not force:
-        if not confirm(f"Install {total_changes} file(s)?"):
+        if not confirm(f"Apply {total_changes} change(s)?"):
             print_warning("Installation cancelled.")
             raise typer.Exit(0)
 
@@ -244,7 +304,7 @@ def install(
         print_success("Installation complete!")
 
     except InstallationError as e:
-        print_error(f"Installation failed: {e}")
+        print_error(f"Installation failed: {escape(str(e))}")
         raise typer.Exit(1)
 
 
@@ -258,7 +318,7 @@ def rollback(
     show_banner(__version__)
 
     try:
-        _, backup_mgr, _, _, _ = initialize_managers()
+        _, backup_mgr, _, _, installer = initialize_managers()
     except Exception as e:
         print_error(f"Initialization failed: {e}")
         raise typer.Exit(1)
@@ -273,13 +333,18 @@ def rollback(
 
     # Determine which backup to restore
     if backup_id is None:
-        backup_id = backups[0]["id"]
+        valid = [b for b in backups if not b.get("invalid")]
+        if not valid:
+            print_error("No valid backups available")
+            raise typer.Exit(1)
+        backup_id = valid[0]["id"]
         print_info(f"Using most recent backup: {backup_id}")
 
-    # Verify backup exists
-    backup_path = backup_mgr.backup_dir / backup_id
-    if not backup_path.exists():
-        print_error(f"Backup not found: {backup_id}")
+    # Verify backup exists (a single name inside the backups folder)
+    try:
+        backup_path = backup_mgr.resolve_backup(backup_id)
+    except FileNotFoundError:
+        print_error(f"Backup not found: {escape(str(backup_id))}")
         raise typer.Exit(1)
 
     # Confirm
@@ -289,15 +354,22 @@ def rollback(
             raise typer.Exit(0)
 
     if dry_run:
-        print_info(f"Would restore from: {backup_path}")
+        print_info(f"Would restore from: {escape(str(backup_path))}")
+        archive_dir = backup_mgr.get_archive_dir(backup_id)
+        if archive_dir is not None:
+            print_info(
+                f"Would move archived retired paths back from: {escape(str(archive_dir))} "
+                "(only where the path is free)"
+            )
         raise typer.Exit(0)
 
     # Perform rollback
     try:
-        restored_path = backup_mgr.restore_backup(backup_id)
-        print_success(f"Configuration restored from {restored_path.name}")
-    except FileNotFoundError as e:
-        print_error(str(e))
+        restored_path = backup_mgr.restore_backup(backup_id, managed_files=installer.managed_relpaths())
+        print_success(f"Configuration restored from {escape(restored_path.name)}")
+        show_restore_result(backup_mgr.last_archive_restore, backup_mgr.last_restore_skipped)
+    except (FileNotFoundError, BackupError) as e:
+        print_error(escape(str(e)))
         raise typer.Exit(1)
 
 
@@ -307,7 +379,7 @@ def status():
     show_banner(__version__)
 
     try:
-        _, _, version_mgr, _, _ = initialize_managers()
+        _, _, version_mgr, _, installer = initialize_managers()
     except Exception as e:
         print_error(f"Initialization failed: {e}")
         raise typer.Exit(1)
@@ -315,7 +387,12 @@ def status():
     installed = version_mgr.get_installed()
     available = version_mgr.get_available()
 
-    show_status(installed, available)
+    show_status(
+        installed,
+        available,
+        retired_present=installer.get_retired_present(),
+        archives=installer.archive_mgr.list_runs(),
+    )
 
 
 @app.command()
@@ -349,8 +426,13 @@ def backups(
 def plugins(
     install: bool = typer.Option(False, "--install", help="Install missing plugins"),
     check: bool = typer.Option(True, "--check/--no-check", help="Check installation status"),
+    update_plugins: bool = typer.Option(
+        False,
+        "--update",
+        help="Refresh team marketplaces, install missing and update installed required plugins",
+    ),
 ):
-    """Check and install required plugins."""
+    """Check, install and update required plugins."""
     show_banner(__version__)
 
     try:
@@ -358,6 +440,13 @@ def plugins(
     except Exception as e:
         print_error(f"Initialization failed: {e}")
         raise typer.Exit(1)
+
+    for warning in plugin_mgr.get_warnings():
+        print_warning(warning)
+
+    if update_plugins:
+        sync_plugins(plugin_mgr)
+        return
 
     if check:
         status_dict = plugin_mgr.check_installed()
@@ -390,58 +479,152 @@ def plugins(
 
         console.print(f"\n[bold]Installing {len(missing)} plugin(s)...[/bold]")
 
-        results = plugin_mgr.install_all_missing()
-        for plugin_name, (success, message) in results.items():
-            if success:
-                print_success(f"Installed {plugin_name}")
-            else:
-                print_error(f"Failed to install {plugin_name}: {message}")
+        marketplace_results: dict[str, tuple[bool, str]] = {}
+        results = plugin_mgr.install_all_missing(marketplace_results)
+        _print_results(
+            {k: v for k, v in marketplace_results.items() if v[1] != "already known"},
+            "Added marketplace",
+            "Failed to add marketplace",
+        )
+        _print_results(results, "Installed", "Failed to install")
 
 
 @app.command()
 def update(
     check: bool = typer.Option(False, "--check", help="Check for updates only"),
+    skip_plugins: bool = typer.Option(
+        False,
+        "--skip-plugins",
+        help="Do not refresh marketplaces or install/update required plugins",
+    ),
+    yes: bool = typer.Option(
+        False,
+        "--yes",
+        "-y",
+        "--force",
+        help="Archive retired paths without asking for confirmation",
+    ),
 ):
-    """Check for and install updates."""
+    """Check for and install updates.
+
+    Retired paths listed in the manifest are moved (never deleted) into
+    ~/.claude/archived/<timestamp>/ after confirmation (or with --yes).
+    Declining cancels the whole update (exit 0, nothing changed); Ctrl-C
+    aborts with exit code 130.
+
+    After the configuration files are updated (or found up to date), team
+    marketplaces are refreshed, missing required plugins are installed and
+    installed required plugins are updated. Plugin failures are reported but
+    do not fail the command. Use --skip-plugins to skip the plugin steps.
+    """
     show_banner(__version__)
 
     try:
-        registry, _, version_mgr, _, installer = initialize_managers()
+        registry, _, version_mgr, plugin_mgr, installer = initialize_managers()
     except Exception as e:
         print_error(f"Initialization failed: {e}")
         raise typer.Exit(1)
 
     has_updates = version_mgr.has_updates()
+    retired_present = installer.get_retired_present()
 
     if check:
         if has_updates:
             print_warning("Updates are available. Run 'claude-setup update' to install.")
         else:
             print_success("Configuration is up to date")
+        if retired_present:
+            print_warning(f"{len(retired_present)} retired path(s) still present (would be archived by 'update'):")
+            for path in retired_present:
+                console.print(f"  • {escape(str(path))}")
         raise typer.Exit(0)
-
-    if not has_updates:
-        print_success("Configuration is already up to date")
-        raise typer.Exit(0)
-
-    print_info("Updates available. Re-running installation...")
 
     # Get previously installed categories
     installed = version_mgr.get_installed()
     categories = installed.get("categories", [])
 
-    if not categories:
-        print_warning("No previous installation found. Use 'claude-setup install' instead.")
-        raise typer.Exit(0)
+    if not has_updates and not retired_present:
+        print_success("Configuration is already up to date")
+    else:
+        if has_updates:
+            print_info("Updates available. Re-running installation...")
+        else:
+            print_info(f"{len(retired_present)} retired path(s) still present. Re-running installation...")
 
-    # Re-install with same categories
+        if not categories:
+            print_warning("No previous installation found. Use 'claude-setup install' instead.")
+            raise typer.Exit(0)
+
+        try:
+            archive_retired = _confirm_archive(installer, categories, assume_yes=yes)
+        except KeyboardInterrupt:
+            print_warning("Update aborted. Nothing was changed.")
+            raise typer.Exit(130)
+        except InstallationError as e:
+            print_error(f"Update failed: {escape(str(e))}")
+            raise typer.Exit(1)
+
+        if not archive_retired:
+            # Declining (or EOF) cancels the whole update: no install, backup,
+            # settings merge, version stamp or plugin steps.
+            print_warning("Update cancelled; nothing changed.")
+            raise typer.Exit(0)
+
+        # Re-install with same categories
+        try:
+            result = installer.install(categories, dry_run=False, force=False)
+            show_summary(result)
+            print_success("Update complete!")
+        except InstallationError as e:
+            print_error(f"Update failed: {escape(str(e))}")
+            raise typer.Exit(1)
+        except KeyboardInterrupt:
+            print_warning(
+                "Update interrupted. Anything already moved is recorded in ~/.claude/archived/; "
+                "run 'claude-setup rollback' to undo."
+            )
+            raise typer.Exit(130)
+
+    _maybe_sync_plugins(plugin_mgr, categories, skip_plugins)
+
+
+def _confirm_archive(installer: Installer, categories: list[str], assume_yes: bool) -> bool:
+    """Show retired paths that would be archived and ask before moving them.
+
+    Returns True to go ahead (also when there is nothing to archive). False
+    means the user declined (or EOF / no answer available): callers cancel
+    the whole update.
+
+    Raises:
+        KeyboardInterrupt: Ctrl-C aborts; callers stop without installing.
+        InstallationError: the manifest is malformed.
+    """
+    plan = installer.compute_plan(categories)
+    items = plan.get("Archive", [])
+    for entry, reason in plan.get("Refused", []):
+        print_warning(f"Ignored retired entry {escape(repr(entry))}: {escape(str(reason))}")
+    if not items:
+        return True
+
+    show_archive_plan(items)
+    if assume_yes:
+        return True
     try:
-        result = installer.install(categories, dry_run=False, force=False)
-        show_summary(result)
-        print_success("Update complete!")
-    except InstallationError as e:
-        print_error(f"Update failed: {e}")
-        raise typer.Exit(1)
+        answer = confirm(f"Move {len(items)} retired path(s) into the archive?")
+    except EOFError:
+        answer = False
+    return bool(answer)
+
+
+def _maybe_sync_plugins(plugin_mgr: PluginManager, categories: list[str], skip: bool) -> None:
+    """Run the plugin sync after an update unless it is skipped or not applicable."""
+    if skip:
+        print_info("Skipping plugin steps (--skip-plugins)")
+        return
+    if "plugins" not in categories:
+        print_info("The 'plugins' category is not installed; skipping plugin steps")
+        return
+    sync_plugins(plugin_mgr)
 
 
 @app.command()
@@ -755,13 +938,13 @@ def interactive_install():
     show_install_plan(plan)
 
     # Check if changes needed
-    total_changes = len(plan["New"]) + len(plan["Updated"]) + len(plan["Merge"])
+    total_changes = len(plan["New"]) + len(plan["Updated"]) + len(plan["Merge"]) + len(plan.get("Archive", []))
     if total_changes == 0:
         print_success("All files are up to date. No changes needed.")
         return
 
     # Confirm
-    if not confirm(f"Install {total_changes} file(s)?"):
+    if not confirm(f"Apply {total_changes} change(s)?"):
         print_warning("Installation cancelled.")
         return
 
@@ -771,7 +954,7 @@ def interactive_install():
         show_summary(result)
         print_success("Installation complete!")
     except InstallationError as e:
-        print_error(f"Installation failed: {e}")
+        print_error(f"Installation failed: {escape(str(e))}")
 
 
 def interactive_plugins():
@@ -802,15 +985,18 @@ def interactive_plugins():
         # Ask if they want to install
         if questionary.confirm("Install missing plugins now?", default=True).ask():
             console.print(f"\n[bold]Installing {len(missing)} plugin(s)...[/bold]")
-            results = plugin_mgr.install_all_missing()
-
-            for plugin_name, (success, message) in results.items():
-                if success:
-                    print_success(f"Installed {plugin_name}")
-                else:
-                    print_error(f"Failed to install {plugin_name}: {message}")
+            marketplace_results: dict[str, tuple[bool, str]] = {}
+            results = plugin_mgr.install_all_missing(marketplace_results)
+            _print_results(
+                {k: v for k, v in marketplace_results.items() if v[1] != "already known"},
+                "Added marketplace",
+                "Failed to add marketplace",
+            )
+            _print_results(results, "Installed", "Failed to install")
     else:
         print_success("All required plugins are installed")
+        if questionary.confirm("Refresh team marketplaces and update required plugins now?", default=False).ask():
+            sync_plugins(plugin_mgr)
 
 
 def interactive_backups():
@@ -857,7 +1043,7 @@ def interactive_backups():
 def interactive_rollback():
     """Interactive rollback."""
     try:
-        _, backup_mgr, _, _, _ = initialize_managers()
+        _, backup_mgr, _, _, installer = initialize_managers()
     except Exception as e:
         print_error(f"Initialization failed: {e}")
         return
@@ -895,31 +1081,41 @@ def interactive_rollback():
 
     # Perform rollback
     try:
-        restored_path = backup_mgr.restore_backup(backup_id)
-        print_success(f"Configuration restored from {restored_path.name}")
-    except FileNotFoundError as e:
-        print_error(str(e))
+        restored_path = backup_mgr.restore_backup(backup_id, managed_files=installer.managed_relpaths())
+        print_success(f"Configuration restored from {escape(restored_path.name)}")
+        show_restore_result(backup_mgr.last_archive_restore, backup_mgr.last_restore_skipped)
+    except (FileNotFoundError, BackupError) as e:
+        print_error(escape(str(e)))
 
 
 def interactive_update():
     """Interactive update check and install."""
     try:
-        registry, _, version_mgr, _, installer = initialize_managers()
+        registry, _, version_mgr, plugin_mgr, installer = initialize_managers()
     except Exception as e:
         print_error(f"Initialization failed: {e}")
         return
 
-    has_updates = version_mgr.has_updates()
+    has_updates = version_mgr.has_updates() or bool(installer.get_retired_present())
 
     if not has_updates:
         print_success("Configuration is already up to date")
+        categories = version_mgr.get_installed().get("categories", [])
+        if "plugins" in categories and plugin_mgr.required_plugins:
+            if questionary.confirm("Refresh team marketplaces and update required plugins?", default=True).ask():
+                sync_plugins(plugin_mgr)
         return
 
     print_info("Updates are available!")
 
     installed = version_mgr.get_installed()
     available = version_mgr.get_available()
-    show_status(installed, available)
+    show_status(
+        installed,
+        available,
+        retired_present=installer.get_retired_present(),
+        archives=installer.archive_mgr.list_runs(),
+    )
 
     if not questionary.confirm("Install updates now?", default=True).ask():
         print_info("Update cancelled. Run 'claude-setup update' later to install.")
@@ -931,13 +1127,29 @@ def interactive_update():
         print_warning("No previous installation found. Use 'Install Configuration' instead.")
         return
 
+    try:
+        archive_retired = _confirm_archive(installer, categories, assume_yes=False)
+    except KeyboardInterrupt:
+        print_warning("Update aborted. Nothing was changed.")
+        return
+    except InstallationError as e:
+        print_error(f"Update failed: {escape(str(e))}")
+        return
+
+    if not archive_retired:
+        print_warning("Update cancelled; nothing changed.")
+        return
+
     # Re-install with same categories
     try:
         result = installer.install(categories, dry_run=False, force=False)
         show_summary(result)
         print_success("Update complete!")
     except InstallationError as e:
-        print_error(f"Update failed: {e}")
+        print_error(f"Update failed: {escape(str(e))}")
+        return
+
+    _maybe_sync_plugins(plugin_mgr, categories, skip=False)
 
 
 def interactive_create_config(show_next_steps: bool = True) -> Optional[Path]:

@@ -313,7 +313,8 @@ your-org/claude-config/
 - [ ] Configure `settings.json` with team defaults
 - [ ] Add team-specific rules in `rules/`
 - [ ] Add custom commands in `commands/`
-- [ ] List required plugins in `plugins/required.json`
+- [ ] List required plugins in `plugins/required.json` (optionally with their `marketplace`)
+- [ ] List removed files under `"retired"` in `manifest.json` when you stop shipping them
 - [ ] Write clear README for your team
 - [ ] Add LICENSE file if open-sourcing
 
@@ -552,6 +553,151 @@ You can have different category structures:
   ]
 }
 ```
+
+### Distributing Skills and Agents as Plugins
+
+If your config repo is also a Claude Code plugin marketplace, engineers can get
+skills and agents as plugins instead of copied files.
+
+**1. Declare the marketplace on required plugins** (`plugins/required.json`):
+
+```json
+[
+  {
+    "name": "team-skills@team-tools",
+    "description": "Team skills and agents",
+    "marketplace": {"name": "team-tools", "source": "example-org/team-config"}
+  },
+  {
+    "name": "ralph-loop@claude-plugins-official",
+    "description": "Entry without a marketplace: the marketplace must already be known"
+  }
+]
+```
+
+| Field | Required | Meaning |
+|-------|----------|---------|
+| `name` | yes | Plugin id, normally `plugin@marketplace` |
+| `description` | yes | Shown by `claude-setup plugins` |
+| `marketplace.name` | with `marketplace` | Marketplace name. Must equal the `name` in that marketplace's own `.claude-plugin/marketplace.json` (that is what Claude Code records in `known_marketplaces.json`; otherwise every run tries to add it again) and should match the `@` suffix (a mismatch is warned about) |
+| `marketplace.source` | with `marketplace` | Passed to `claude plugin marketplace add`: GitHub `owner/repo`, git/https URL, or path. A path starting with `./` or `../` is resolved against the config repo; use an absolute path otherwise (a bare `owner/repo` is always GitHub) |
+
+Before installing a plugin, claude-setup reads
+`~/.claude/plugins/known_marketplaces.json`. If the marketplace isn't listed
+(or the file is missing or unreadable), it runs
+`claude plugin marketplace add <source>`, then `claude plugin install <name>`.
+Entries without `marketplace` behave exactly as before.
+
+**2. Optionally declare it in team settings.** `extraKnownMarketplaces` in
+`core/settings.json` is merged into each user's settings keyed by marketplace
+name. The team entry wins for the same name; the user's own marketplaces are kept.
+
+```json
+{
+  "extraKnownMarketplaces": {
+    "team-tools": {"source": {"source": "github", "repo": "example-org/team-config"}}
+  }
+}
+```
+
+**3. What `claude-setup update` does:**
+
+1. Updates config files (when the config changed, or when retired paths are
+   still present), moving retired paths into `~/.claude/archived/` after
+   confirmation
+2. Refreshes each marketplace declared in `required.json`
+   (`claude plugin marketplace update <name>`, or `add` if it isn't known yet)
+3. Installs missing required plugins (`claude plugin install <plugin>`)
+4. Updates required plugins that were already installed (`claude plugin update <plugin>`)
+
+Steps 2-4 run even when the config files are already up to date, and only when
+the `plugins` category is installed. Failures are reported and don't fail the
+update. `--skip-plugins` skips them; `claude-setup plugins --update` runs only
+them. claude-setup never passes `-y`, so a plugin that needs a
+marketplace-declared command to be confirmed has to be installed by hand.
+Git is run with `GIT_TERMINAL_PROMPT=0`, plus `GIT_SSH_COMMAND="ssh -o
+BatchMode=yes"` when you have no SSH override of your own (`GIT_SSH_COMMAND`,
+`GIT_SSH` or `git config core.sshCommand`), so a private marketplace that
+needs credentials fails instead of hanging. Each `claude` call runs in its own
+process group, which is killed on timeout or Ctrl-C; after one marketplace
+operation times out, the remaining marketplace steps are skipped. Plugin names and marketplace
+names/sources starting with `-` are rejected.
+
+**4. Retire the copied files.** When a skill or agent moves into a plugin, list
+the old path in `manifest.json` so the copied version is moved out of the way
+on engineers' machines (otherwise Claude Code loads both):
+
+```json
+{
+  "version": "1.0.0",
+  "retired": ["skills/old-skill", "agents/old-agent.md"],
+  "categories": [...]
+}
+```
+
+- Paths are relative to `~/.claude` and may be files, directories or symlinks.
+- Nothing is deleted. `install` and `update` **move** each path (a rename, so
+  a symlink is moved as a symlink) to
+  `~/.claude/archived/<timestamp>/<original path>`. If that name is taken, a
+  `-1`, `-2`, ... suffix is added instead of overwriting. Claude Code doesn't
+  load anything from `archived/`.
+- `update` lists each path with its destination and asks before moving
+  (`--yes` / `-y` / `--force` skips the question). Declining (or EOF)
+  cancels the whole update with exit code 0 and "Update cancelled; nothing
+  changed": no install, backup, settings merge, version stamp or plugin
+  steps. Ctrl-C does the same with exit code 130. `install --dry-run` shows
+  them with status `Archive`;
+  `update --check` and `status` list retired paths still present, and `status`
+  also lists earlier archive folders.
+- Rollback: each archive folder has an `archive-manifest.json` journal. Each
+  item is recorded as `pending` before it is moved and `done` after, and the
+  file is replaced atomically and never written through a symlink. The backup
+  taken by the same install records the archive folder (`"archive"` in its
+  `backup-manifest.json`). `claude-setup rollback` uses that to move items back
+  to their original paths, skipping (and reporting) any path that already
+  exists, and copes with runs interrupted part-way (items never moved are
+  reported as missing). It only accepts a real (non-symlink) folder directly
+  inside a real `~/.claude/archived/`, and validates every item: the original
+  must pass the same rules as retiring, and the archived path must stay inside
+  the run folder with no symlinked component except the item itself.
+  Malformed entries are reported and skipped. Engineers can also move items
+  back by hand, or delete `~/.claude/archived/` once they're happy.
+- Allowlist (fixed): an entry must be strictly inside `skills/`, `agents/` or
+  `commands/`, matched exactly (case-sensitive, after NFC normalisation), so
+  `SKILLS/x` is refused. Manifest categories do not extend this list. Everything else is
+  refused and never touched, including `rules/`, `projects/`, `plugins/`,
+  `todos/`, `settings*.json`, `history.jsonl`, credentials, `archived/`,
+  `backups/`, `sources/` and the allowlisted directories themselves.
+- Symlinks: refused if any existing folder between `~/.claude` and the item is
+  a symlink, including `skills/`, `agents/` or `commands/` themselves (for
+  example a dotfiles-managed `skills/` symlink). Only the item itself may be a
+  symlink; it is moved as a link. Archiving is refused if
+  `~/.claude/archived` is a symlink.
+- Also refused: absolute paths, backslashes, anything containing `..` or
+  control characters, paths resolving outside the allowlisted folder, the
+  config source directory, any `local` source path in `sources.json`, and any
+  path that is or contains a file the manifest installs. Path parts may not
+  start or end with whitespace. Overlap and protection checks ignore letter
+  case and Unicode normalisation (NFC/NFD), so they only ever refuse more. When one entry is inside
+  another (`skills/x` and `skills/x/y`), only the outer one is moved. If any
+  manifest file entry is malformed (e.g. `"dest": null`), all retired entries
+  are refused and `install`/`update` stop with an error.
+- Backups and rollback: backups made in the same second get a `-1`, `-2`, ...
+  suffix instead of sharing a folder. `rollback <id>` only accepts the plain
+  name of an existing backup folder. A `backup-manifest.json` that isn't valid
+  (bad JSON, too deeply nested, `created_at` not an ISO timestamp,
+  `categories` not a list of strings) marks the backup invalid; it is listed
+  but never picked as "most recent". Restore only reads files inside the
+  backup folder (no symlinks) and only writes inside `~/.claude`: a file whose
+  destination is under a symlinked folder is skipped and reported. If the
+  destination itself is a symlink (for example a dotfiles-linked
+  `CLAUDE.md`), it is written through only when it's a file the current
+  manifest installs; otherwise it is skipped.
+- Residual risk: a move checks that the destination is free and then
+  renames, so another process creating that path in between could be
+  overwritten. An interrupted run can leave a hidden
+  `.archive-manifest.json.*.tmp` file in the archive folder, which is safe to
+  delete.
 
 ---
 

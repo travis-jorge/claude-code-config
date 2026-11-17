@@ -36,6 +36,9 @@ class CategoryRegistry:
         self.config_dir = config_dir
         self.manifest_path = config_dir / "manifest.json"
         self.categories: dict[str, Category] = {}
+        # Paths (relative to ~/.claude) the team no longer ships and wants removed.
+        # Entries are validated by the Installer before anything is touched.
+        self.retired: list = []
         self._load_manifest()
 
     def _load_manifest(self) -> None:
@@ -45,6 +48,9 @@ class CategoryRegistry:
 
         with open(self.manifest_path) as f:
             data = json.load(f)
+
+        retired = data.get("retired", [])
+        self.retired = list(retired) if isinstance(retired, list) else []
 
         for cat_data in data["categories"]:
             files = [FileEntry(**f) for f in cat_data.get("files", [])]
